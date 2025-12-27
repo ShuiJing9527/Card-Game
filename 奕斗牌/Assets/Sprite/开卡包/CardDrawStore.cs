@@ -91,102 +91,113 @@ public class CardDrawStore : MonoBehaviour
         return MonsterCardType.Effect;
     }
 
-    // 简单把费用列（如果存在）解析为 List<CardCostInfo>
-    List<CardCostInfo> ParseCosts(string value, string desc)
-    {
-        var costs = new List<CardCostInfo>();
-        int cv = SafeParseInt(value, -1);
-        if (cv >= 0)
-        {
-            costs.Add(new CardCostInfo(cv, desc ?? ""));
-        }
-        else
-        {
-            // 没有数字时，放默认无费用
-            costs.Add(new CardCostInfo(0, "无费用"));
-        }
-        return costs;
-    }
-
     public void LoadCardData()
     {
         cardList.Clear();
         if (cardData == null) { Debug.LogError("cardData 为 null"); return; }
 
         var rows = ReadCsvRows(cardData.text);
-        foreach (var raw in rows)
+        if (rows.Count == 0) { Debug.LogWarning("CSV 无内容"); return; }
+
+        // 找 header 行（包含 "卡片ID" 或以 '#' 开头）
+        int headerRow = -1;
+        for (int i = 0; i < rows.Count; i++)
         {
+            if (string.IsNullOrWhiteSpace(rows[i])) continue;
+            var cols = ParseCsvLine(rows[i]);
+            if (cols.Exists(c => c.Contains("卡片ID") || c.Contains("卡名") || c.Contains("卡片") || cols[0].StartsWith("#")))
+            {
+                headerRow = i;
+                break;
+            }
+        }
+
+        Dictionary<string, int> idx = new Dictionary<string, int>();
+        if (headerRow >= 0)
+        {
+            var headers = ParseCsvLine(rows[headerRow]);
+            for (int h = 0; h < headers.Count; h++)
+            {
+                var key = headers[h]?.Trim();
+                if (string.IsNullOrEmpty(key)) continue;
+                key = key.Replace(" ", "").Replace("#", "");
+                idx[key] = h;
+            }
+        }
+
+        string Field(int rowIndex, string headerName, int fallbackIndex = -1)
+        {
+            var cols = ParseCsvLine(rows[rowIndex]);
+            if (idx != null && idx.TryGetValue(headerName, out int i) && i >= 0 && i < cols.Count) return cols[i];
+            if (fallbackIndex >= 0 && fallbackIndex < cols.Count) return cols[fallbackIndex];
+            return "";
+        }
+
+        for (int r = 0; r < rows.Count; r++)
+        {
+            if (r == headerRow) continue;
+            var raw = rows[r];
             if (string.IsNullOrWhiteSpace(raw)) continue;
             var cols = ParseCsvLine(raw);
             if (cols.Count == 0) continue;
 
-            // 单次定义 SafeAt，避免重复定义冲突
-            string SafeAt(int idx) => (idx >= 0 && idx < cols.Count) ? cols[idx] : "";
-
-            // 优先使用首列作为 tag（若 CSV 第一列始终是 tag）
-            string tag = SafeAt(0).Trim();
+            string tag = cols[0].Trim();
             if (string.IsNullOrEmpty(tag) || tag.StartsWith("#")) continue;
 
             if (tag.Equals("monster", System.StringComparison.OrdinalIgnoreCase))
             {
-                int id = SafeParseInt(SafeAt(1));
-                string name = SafeAt(2);
-                int atk = SafeParseInt(SafeAt(3));
-                int lv = SafeParseInt(SafeAt(4));
-                string attributes = SafeAt(5);
-                string link = SafeAt(6);
-                string linkEffect = SafeAt(7);
-                string typeField = SafeAt(8);
-                string description = SafeAt(9);
+                int id = SafeParseInt(Field(r, "卡片ID", 1));
+                string name = Field(r, "卡名Name", 2);
+                string attr = Field(r, "属性Attributes", 3);
+                string lvStr = Field(r, "等级Lv", 4);
+                string atkStr = Field(r, "战力Atk", 5);
+                string link = Field(r, "羁绊Link", 6);
+                string linkDesc = Field(r, "羁绊描述LinkDescription", 7);
+                string typeField = Field(r, "类型Effect/Judge", 9);
+                string description = Field(r, "效果/判定描述mainDescription", 10);
+
+                int lv = SafeParseInt(lvStr, 0);
+                int atk = SafeParseInt(atkStr, 0);
+
+                if (string.IsNullOrWhiteSpace(attr))
+                {
+                    for (int i = 2; i < cols.Count && i <= 6; i++)
+                    {
+                        var v = cols[i]?.Trim();
+                        if (v == "土" || v == "火" || v == "水" || v == "木" || v == "金")
+                        {
+                            attr = v;
+                            break;
+                        }
+                    }
+                }
 
                 var mType = ParseMonsterType(typeField);
-
+                // 下面假设你的项目已定义 MonsterCard 构造或属性；如果不是，请调整为符合你项目的 MonsterCard 类型建立方式
                 MonsterCard monsterCard = new MonsterCard(
                     id, name ?? "", description ?? "", "monster",
-                    atk, lv, attributes ?? "", link ?? "", linkEffect ?? "", null, monsterType: mType
+                    atk, lv, attr ?? "", link ?? "", linkDesc ?? "", null, monsterType: mType
                 );
                 cardList.Add(monsterCard);
-                Debug.Log($"Loaded Monster Card: {name} (type={mType})");
+                Debug.Log($"Loaded Monster: id={id} name={name} attr='{attr}' atk={atk} lv={lv}");
             }
             else if (tag.Equals("spell", System.StringComparison.OrdinalIgnoreCase))
             {
-                // 假设 CSV 列顺序（如无 header 请按实际调整）：
-                // tag(0), id(1), name(2), description(3), type(4),
-                // canUseAsMagic(5), canUseAsStack(6), stackCount(7), atk(8), costValue(9), costDesc(10)
-
-                int id = SafeParseInt(SafeAt(1));
-                string name = SafeAt(2);
-                string description = SafeAt(3);
-                string type = SafeAt(4);
-
-                bool canUseAsMagic = ParseBoolLike(SafeAt(5));
-                bool canUseAsStack = ParseBoolLike(SafeAt(6));
-                int stackCount = SafeParseInt(SafeAt(7), 1);
-                int atk = SafeParseInt(SafeAt(8), 0);
-
-                // 解析费用（简单实现：一列数值 + 一列描述）
-                List<CardCostInfo> costs = null;
-                if (!string.IsNullOrWhiteSpace(SafeAt(9)) || !string.IsNullOrWhiteSpace(SafeAt(10)))
-                {
-                    costs = ParseCosts(SafeAt(9), SafeAt(10));
-                }
-
-                // 创建 SpellCard：构造器 (int id, string name, string desc, string type, bool canUseAsMagic, bool canUseAsStack, List<CardCostInfo> costs = null)
-                SpellCard spellCard = new SpellCard(id, name ?? "", description ?? "", string.IsNullOrEmpty(type) ? "spell" : type,
-                    canUseAsMagic, canUseAsStack, costs);
-
-                // 赋值额外字段
-                spellCard.StackCount = Mathf.Max(1, stackCount);
-                spellCard.Card_Atk = atk;
-
+                int id = SafeParseInt(Field(r, "卡片ID", 1));
+                string name = Field(r, "卡名Name", 2);
+                string desc = Field(r, "咒术描述MagicDescription", 3);
+                string stackDesc = Field(r, "叠放描述StackDescription", 4);
+                // 假设项目已有 SpellCard 对应构造
+                SpellCard spellCard = new SpellCard(id, name ?? "", desc ?? "", "spell", false, false, null);
                 cardList.Add(spellCard);
-                Debug.Log($"Loaded Spell Card: {name} (id={id}, stack={spellCard.StackCount}, atk={spellCard.Card_Atk}, magic={canUseAsMagic}, stackable={canUseAsStack})");
+                Debug.Log($"Loaded Spell: id={id} name={name}");
             }
             else
             {
-                Debug.LogWarning($"未识别的 tag '{tag}'，跳过行：{raw}");
+                Debug.LogWarning($"未知 tag {tag} 跳过行 {r}");
             }
         }
+
         Debug.Log($"Loaded total {cardList.Count} cards.");
     }
 
