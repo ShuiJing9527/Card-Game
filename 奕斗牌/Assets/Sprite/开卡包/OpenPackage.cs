@@ -1,4 +1,6 @@
+using NUnit.Framework;
 using UnityEngine;
+using System.Collections.Generic; // 必须：用于 List<GameObject>
 
 public class OpenPackage : MonoBehaviour
 {
@@ -10,9 +12,12 @@ public class OpenPackage : MonoBehaviour
     public Transform cardParent;        // 备选父对象（当 cardPool 未设置时使用）
     public GameObject cardPool;         // 优先把生成的卡放到 cardPool.transform
 
+    CardDrawStore CardDrawStore;
+    private readonly List<GameObject> _generatedCards = new List<GameObject>();
+
     void Awake()
     {
-#if UNITY_2023_2_OR_NEWER
+#if UNITYNEWER
         if (cardDrawStore == null)
             cardDrawStore = GetComponent<CardDrawStore>() ?? FindFirstObjectByType<CardDrawStore>();
 #else
@@ -24,6 +29,9 @@ public class OpenPackage : MonoBehaviour
     // 在 Inspector 按钮或 UI 事件调用此方法以“开包”
     public void OnClickOpen()
     {
+        // 每次开包前先清理旧卡
+        ClearOldCards();
+
         if (cardDrawStore == null)
         {
             Debug.LogError("OpenPackage: cardDrawStore 未找到，请在 Inspector 指定或确保场景存在 CardDrawStore");
@@ -46,7 +54,8 @@ public class OpenPackage : MonoBehaviour
 
             if (msg is MonsterCard m)
             {
-                var prefab = GetMonsterPrefabByAttr(m.Card_Attributes, m);
+                // 注意：prefab 在此作用域声明并使用，不会出现 scope 问题
+                GameObject prefab = GetMonsterPrefabByAttr(m.Card_Attributes, m);
                 if (prefab == null)
                 {
                     Debug.LogWarning($"OpenPackage: 未找到匹配的怪兽 prefab (attr='{m.Card_Attributes}'), 回退使用第一个 prefab");
@@ -61,9 +70,12 @@ public class OpenPackage : MonoBehaviour
                 go.transform.localScale = Vector3.one;
                 go.name = $"Monster_{m.Card_ID}_{m.Card_Name}";
 
-                var md = go.GetComponent<MonsterCardDisplay>() ?? go.GetComponentInChildren<MonsterCardDisplay>();
+                var md = go.GetComponent<MonsterCardDisplay>() ?? go.GetComponentInChildren<MonsterCardDisplay>(true);
                 if (md != null) md.SetCard(m);
                 else Debug.LogWarning($"OpenPackage: prefab '{prefab.name}' 缺少 MonsterCardDisplay，无法赋数据");
+
+                // 记录生成的实例，供下次清理
+                _generatedCards.Add(go);
 
                 Debug.Log($"OpenPackage: Instantiate Monster '{m.Card_Name}' attr='{m.Card_Attributes}' -> prefab '{prefab.name}'");
             }
@@ -82,9 +94,12 @@ public class OpenPackage : MonoBehaviour
                 go.transform.localScale = Vector3.one;
                 go.name = $"Spell_{s.Card_ID}_{s.Card_Name}";
 
-                var sd = go.GetComponent<SpellCardDisplay>() ?? go.GetComponentInChildren<SpellCardDisplay>();
+                var sd = go.GetComponent<SpellCardDisplay>() ?? go.GetComponentInChildren<SpellCardDisplay>(true);
                 if (sd != null) sd.SetCard(s);
                 else Debug.LogWarning($"OpenPackage: spell prefab '{spellPrefab.name}' 缺少 SpellCardDisplay，无法赋数据");
+
+                // 记录生成的实例
+                _generatedCards.Add(go);
 
                 Debug.Log($"OpenPackage: Instantiate Spell '{s.Card_Name}'");
             }
@@ -109,20 +124,31 @@ public class OpenPackage : MonoBehaviour
 
         if (string.IsNullOrWhiteSpace(attr))
         {
-            // 没有属性时，回退到基于 ID 的分配（保证有稳定输出）
             return monsterPrefabs[Mathf.Abs(m.Card_ID) % monsterPrefabs.Length];
         }
 
         attr = attr.Trim();
 
-        // 支持中文关键字匹配（可按需要扩展）
         if (attr.Contains("土")) return monsterPrefabs.Length > 0 ? monsterPrefabs[0] : monsterPrefabs[0];
         if (attr.Contains("木")) return monsterPrefabs.Length > 1 ? monsterPrefabs[1] : monsterPrefabs[0];
         if (attr.Contains("水")) return monsterPrefabs.Length > 2 ? monsterPrefabs[2] : monsterPrefabs[0];
         if (attr.Contains("火")) return monsterPrefabs.Length > 3 ? monsterPrefabs[3] : monsterPrefabs[0];
         if (attr.Contains("金")) return monsterPrefabs.Length > 4 ? monsterPrefabs[4] : monsterPrefabs[0];
 
-        // 如果没有匹配到已知属性，回退按 id
         return monsterPrefabs[Mathf.Abs(m.Card_ID) % monsterPrefabs.Length];
+    }
+
+    // 新增：清理旧卡牌（在 OnClickOpen 一开始调用）
+    private void ClearOldCards()
+    {
+        for (int i = 0; i < _generatedCards.Count; i++)
+        {
+            var card = _generatedCards[i];
+            if (card != null)
+            {
+                Destroy(card);
+            }
+        }
+        _generatedCards.Clear();
     }
 }
