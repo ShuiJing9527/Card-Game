@@ -269,14 +269,6 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 1013572116}
     m_Modifications:
-    - target: {fileID: 1293600836208921380, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
-      propertyPath: m_AnchoredPosition.x
-      value: 0
-      objectReference: {fileID: 0}
-    - target: {fileID: 1293600836208921380, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
-      propertyPath: m_AnchoredPosition.y
-      value: -754
-      objectReference: {fileID: 0}
     - target: {fileID: 1639797812477658221, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
       propertyPath: m_Pivot.x
       value: 0.41903222
@@ -362,44 +354,64 @@ PrefabInstance:
       value: Tooltip
       objectReference: {fileID: 0}
     - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
-      propertyPath: maxWidth
-      value: 840
+      propertyPath: elementColors.Array.data[0].b
+      value: 0.32809538
       objectReference: {fileID: 0}
     - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
-      propertyPath: maxHeight
-      value: 220
+      propertyPath: elementColors.Array.data[0].g
+      value: 0.63087773
       objectReference: {fileID: 0}
     - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
-      propertyPath: ignoreRaycasts
-      value: 1
+      propertyPath: elementColors.Array.data[0].r
+      value: 0.7660377
       objectReference: {fileID: 0}
     - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
-      propertyPath: rootSizeDelta.x
-      value: -24
+      propertyPath: elementColors.Array.data[2].b
+      value: 0.8792453
       objectReference: {fileID: 0}
     - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
-      propertyPath: rootSizeDelta.y
-      value: -18
+      propertyPath: elementColors.Array.data[2].g
+      value: 0.72246903
       objectReference: {fileID: 0}
     - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
-      propertyPath: debugForceCenter
-      value: 0
+      propertyPath: elementColors.Array.data[2].r
+      value: 0.3832182
       objectReference: {fileID: 0}
     - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
-      propertyPath: debugLogCombined
-      value: 1
+      propertyPath: elementColors.Array.data[3].b
+      value: 0.31479523
       objectReference: {fileID: 0}
     - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
-      propertyPath: forcedTextBoxSize.x
-      value: 860
+      propertyPath: elementColors.Array.data[3].g
+      value: 0.46473473
       objectReference: {fileID: 0}
     - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
-      propertyPath: forcedTextBoxSize.y
-      value: 240
+      propertyPath: elementColors.Array.data[3].r
+      value: 0.93207544
       objectReference: {fileID: 0}
     - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
-      propertyPath: allowOutsideHoverForDebug
-      value: 1
+      propertyPath: elementColors.Array.data[4].b
+      value: 0.7744749
+      objectReference: {fileID: 0}
+    - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
+      propertyPath: elementColors.Array.data[4].g
+      value: 0.8523069
+      objectReference: {fileID: 0}
+    - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
+      propertyPath: elementColors.Array.data[4].r
+      value: 0.86415094
+      objectReference: {fileID: 0}
+    - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
+      propertyPath: elementColors.Array.data[5].b
+      value: 0.7433963
+      objectReference: {fileID: 0}
+    - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
+      propertyPath: elementColors.Array.data[5].g
+      value: 0.57087225
+      objectReference: {fileID: 0}
+    - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
+      propertyPath: elementColors.Array.data[5].r
+      value: 0.6262168
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
@@ -471,7 +483,7 @@ MonoBehaviour:
   - {fileID: 7637388563423290671, guid: d9073a5834cb94d4bacbc8bf059c7fa5, type: 3}
   - {fileID: 9188833186329395536, guid: f44fea8e73ad85042b3125d22be5a9d0, type: 3}
   spellPrefab: {fileID: 8693994883433497810, guid: f050b7f3f6487f94f98151ae24ad2927, type: 3}
-  cardDrawStore: {fileID: 0}
+  cardDrawStore: {fileID: 681127556}
   cardParent: {fileID: 0}
   cardPool: {fileID: 2132544025}
 --- !u!1 &1013572115

@@ -34,8 +34,8 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0, y: 0}
-  m_SizeDelta: {x: 400, y: 150}
+  m_AnchoredPosition: {x: 3.5646, y: 0}
+  m_SizeDelta: {x: 436.6697, y: 150}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!222 &2223791589411892305
 CanvasRenderer:
@@ -65,7 +65,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "\u2460\uFF1A\u8FD9\u5F20\u5361\u5728\u573A\u4E0A\u5B58\u5728\u65F6\uFF0C\u6211\u65B9\u573A\u4E0A\u6240\u6709\u7684\u602A\u517D\u53EF\u4EE5\u5F53\u4F5C\u6C34\u7CFB\u602A\u517D\u3002\u2461\uFF1A\u6211\u65B9\u56DE\u590D\u751F\u547D\u65F6\uFF0C\u56DE\u590D\u90A3\u4E2A\u6570\u503C2\u500D\u7684\u751F\u547D\uFF0C\u5E76\u7ED9\u4E0E\u5BF9\u65B9\u90A3\u4E2A\u6570\u503C\u7684\u4F24\u5BB3\u3002"
+  m_text: "\u2460\uFF1A\u53EF\u4EE5\u89E3\u653E\u8FD9\u5F20\u5361\u4EE5\u5916\u6211\u65B9\u573A\u4E0A1\u53EA\u6728\u7CFB\u602A\u517D\u53D1\u52A8\u3002\u9009\u4EE5\u4E0B1\u9879\u9002\u7528\u3002\u82E5\u6211\u65B9\u751F\u547D\u4F4E\u4E8E10\u65F6\uFF0C\u5219\u4EE5\u4E0B\u6548\u679C\u5168\u90E8\u9002\u7528\u3002\u25CF\u6211\u65B9\u4ECE\u5361\u7EC4\u62BD2\u5F20\u3002\u90A3\u4E4B\u540E\uFF0C\u90091\u5F20\u624B\u5361\u56DE\u5230\u5361\u7EC4\u3002\u25CF\u6211\u65B9\u751F\u547D\u56DE\u590D10\u70B9\u3002\u25CF\u76F4\u5230\u5BF9\u65B9\u56DE\u5408\u7ED3\u675F\u65F6\uFF0C\u8FD9\u5F20\u5361\u7684\u6218\u529B+6\u3002\u25CF\u4ECE\u6211\u65B9\u7684\u5F03\u724C\u5806\u90091\u5F20\u5361\u52A0\u5165\u624B\u5361\u3002"
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 9161bb28010bd304ab25961c7c773719, type: 2}
   m_sharedMaterial: {fileID: 4555486128734236970, guid: 9161bb28010bd304ab25961c7c773719, type: 2}
@@ -92,8 +92,8 @@ MonoBehaviour:
   m_faceColor:
     serializedVersion: 2
     rgba: 4294967295
-  m_fontSize: 30
-  m_fontSizeBase: 30
+  m_fontSize: 28
+  m_fontSizeBase: 28
   m_fontWeight: 400
   m_enableAutoSizing: 0
   m_fontSizeMin: 18
@@ -172,7 +172,7 @@ RectTransform:
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
   m_AnchoredPosition: {x: 0, y: 0}
-  m_SizeDelta: {x: 800, y: 200}
+  m_SizeDelta: {x: 860, y: 240}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!222 &3495610678577687707
 CanvasRenderer:
@@ -237,7 +237,7 @@ RectTransform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 4426855505645245655}
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 5}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -246,9 +246,9 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0, y: 0}
-  m_SizeDelta: {x: 100, y: 100}
-  m_Pivot: {x: 0.5, y: 0.5}
+  m_AnchoredPosition: {x: 0.0000009536743, y: 0}
+  m_SizeDelta: {x: 194.4817, y: 149.8655}
+  m_Pivot: {x: 0.41903222, y: 0.5}
 --- !u!114 &7193509823709973139
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -270,17 +270,37 @@ MonoBehaviour:
   maxWidth: 840
   maxHeight: 220
   aboveOffset: 8
+  rootSizeDelta: {x: -24, y: -18}
+  extraTextBoxPadding: {x: 0, y: 0}
+  forceTextBoxSize: 1
+  forcedTextBoxSize: {x: 860, y: 240}
+  clampForcedToMax: 1
+  respectInspectorTextBoxSize: 1
+  elementColors:
+  - {r: 0.85, g: 0.7, b: 0.45, a: 1}
+  - {r: 0.45, g: 0.8, b: 0.5, a: 1}
+  - {r: 0.45, g: 0.7, b: 0.95, a: 1}
+  - {r: 1, g: 0.55, b: 0.4, a: 1}
+  - {r: 0.9, g: 0.85, b: 0.5, a: 1}
+  - {r: 0.75, g: 0.55, b: 0.95, a: 1}
+  bondTextImage: {fileID: 2525800984600049010}
   forceTopSorting: 1
   sortingOrder: 1000
   hoverYOffsetMin: 5
   hoverYOffsetMax: 10
   horizontalTolerance: 60
-  allowOutsideHoverForDebug: 0
+  allowOutsideHoverForDebug: 1
   positionEpsilon: 2
   sizeEpsilon: 1
-  minUpdateInterval: 0.03
-  ignoreRaycasts: 0
-  debugLogCombined: 0
+  minUpdateInterval: 0.05
+  ignoreRaycasts: 1
+  debugLogCombined: 1
+  requireExtraLinesForDetection: 1
+  bondZoneNameKeywords:
+  - bond
+  - link
+  - "\u7F81\u7ECA"
+  - Link
 --- !u!1 &8756624355032512197
 GameObject:
   m_ObjectHideFlags: 0
@@ -317,8 +337,8 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0, y: -713}
-  m_SizeDelta: {x: 780, y: 190}
+  m_AnchoredPosition: {x: 0, y: -754}
+  m_SizeDelta: {x: 840, y: 220}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!222 &326608121590566673
 CanvasRenderer:

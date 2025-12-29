@@ -1,29 +1,22 @@
-using NUnit.Framework;
+using System.Collections.Generic;
 using UnityEngine;
-using System.Collections.Generic; // 必须：用于 List<GameObject>
 
 public class OpenPackage : MonoBehaviour
 {
     [Header("按顺序填写：Element0=土, Element1=木, Element2=水, Element3=火, Element4=金")]
-    public GameObject[] monsterPrefabs; // Inspector 中已按顺序放好（你的截图已正确）
+    public GameObject[] monsterPrefabs; // Inspector 中已按顺序放好
     public GameObject spellPrefab;
 
     public CardDrawStore cardDrawStore; // 可在 Inspector 手动指定（若不指定会自动查找）
     public Transform cardParent;        // 备选父对象（当 cardPool 未设置时使用）
     public GameObject cardPool;         // 优先把生成的卡放到 cardPool.transform
 
-    CardDrawStore CardDrawStore;
     private readonly List<GameObject> _generatedCards = new List<GameObject>();
 
     void Awake()
     {
-#if UNITYNEWER
-        if (cardDrawStore == null)
-            cardDrawStore = GetComponent<CardDrawStore>() ?? FindFirstObjectByType<CardDrawStore>();
-#else
         if (cardDrawStore == null)
             cardDrawStore = GetComponent<CardDrawStore>() ?? FindObjectOfType<CardDrawStore>();
-#endif
     }
 
     // 在 Inspector 按钮或 UI 事件调用此方法以“开包”
@@ -54,7 +47,6 @@ public class OpenPackage : MonoBehaviour
 
             if (msg is MonsterCard m)
             {
-                // 注意：prefab 在此作用域声明并使用，不会出现 scope 问题
                 GameObject prefab = GetMonsterPrefabByAttr(m.Card_Attributes, m);
                 if (prefab == null)
                 {
@@ -74,7 +66,6 @@ public class OpenPackage : MonoBehaviour
                 if (md != null) md.SetCard(m);
                 else Debug.LogWarning($"OpenPackage: prefab '{prefab.name}' 缺少 MonsterCardDisplay，无法赋数据");
 
-                // 记录生成的实例，供下次清理
                 _generatedCards.Add(go);
 
                 Debug.Log($"OpenPackage: Instantiate Monster '{m.Card_Name}' attr='{m.Card_Attributes}' -> prefab '{prefab.name}'");
@@ -94,14 +85,29 @@ public class OpenPackage : MonoBehaviour
                 go.transform.localScale = Vector3.one;
                 go.name = $"Spell_{s.Card_ID}_{s.Card_Name}";
 
-                var sd = go.GetComponent<SpellCardDisplay>() ?? go.GetComponentInChildren<SpellCardDisplay>(true);
-                if (sd != null) sd.SetCard(s);
-                else Debug.LogWarning($"OpenPackage: spell prefab '{spellPrefab.name}' 缺少 SpellCardDisplay，无法赋数据");
+                // 从 CardDrawStore 获取 CSV 中的原始叠放描述（若有）
+                string stackDesc = null;
+                try
+                {
+                    if (cardDrawStore != null)
+                        stackDesc = cardDrawStore.GetStackDescriptionById(s.Card_ID);
+                }
+                catch (System.Exception ex)
+                {
+                    Debug.LogWarning($"OpenPackage: 获取 StackDescription 失败 id={s.Card_ID} : {ex}");
+                }
 
-                // 记录生成的实例
+                Debug.Log($"[OpenPackage] For spell id={s.Card_ID} name='{s.Card_Name}' stackDesc(len={(stackDesc?.Length ?? 0)})='{stackDesc}'");
+
+                var sd = go.GetComponent<SpellCardDisplay>() ?? go.GetComponentInChildren<SpellCardDisplay>(true);
+                if (sd != null)
+                    sd.SetCard(s, stackDesc);
+                else
+                    Debug.LogWarning($"OpenPackage: spell prefab '{spellPrefab.name}' 缺少 SpellCardDisplay，无法赋数据");
+
                 _generatedCards.Add(go);
 
-                Debug.Log($"OpenPackage: Instantiate Spell '{s.Card_Name}'");
+                Debug.Log($"OpenPackage: Instantiate Spell '{s.Card_Name}' (stackDesc len={(stackDesc?.Length ?? 0)})");
             }
             else
             {
@@ -138,7 +144,6 @@ public class OpenPackage : MonoBehaviour
         return monsterPrefabs[Mathf.Abs(m.Card_ID) % monsterPrefabs.Length];
     }
 
-    // 新增：清理旧卡牌（在 OnClickOpen 一开始调用）
     private void ClearOldCards()
     {
         for (int i = 0; i < _generatedCards.Count; i++)
