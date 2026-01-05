@@ -16,7 +16,7 @@ public class OpenPackage : MonoBehaviour
     public GameObject spellPrefab;
 
     [Header("References")]
-    public CardDrawStore cardDrawStore;
+    public CardStore cardDrawStore;
     public CardTextStore textStore;
     public Transform cardParent;
 
@@ -34,10 +34,11 @@ public class OpenPackage : MonoBehaviour
 
     void Awake()
     {
-        if (cardDrawStore == null) cardDrawStore = FindObjectOfType<CardDrawStore>();
+        if (cardDrawStore == null) cardDrawStore = FindObjectOfType<CardStore>();
         if (textStore == null) textStore = FindObjectOfType<CardTextStore>();
     }
 
+    // count = 每次抽几张（默认5）
     public void OnClickOpen(int count = 5)
     {
         if (cardDrawStore == null)
@@ -46,14 +47,47 @@ public class OpenPackage : MonoBehaviour
             return;
         }
 
-        ClearOldCards();
+        // 如果存在 PlayerDataManager，则先检查并尝试扣费
+        bool usedPlayerManager = false;
+        bool deducted = false;
+        int deductAmount = 0;
 
+        if (PlayerDataManager.Instance != null)
+        {
+            usedPlayerManager = true;
+
+            if (!PlayerDataManager.Instance.CanAffordOpen())
+            {
+                Debug.LogWarning("OpenPackage: 金币不足，无法开包");
+                // TODO: 在此处调用你的 UI 提示方法（如弹窗或文字提示）
+                return;
+            }
+
+            // 尝试扣费（默认使用 PlayerDataManager 的 openCost）
+            deducted = PlayerDataManager.Instance.TryConsumeCoinsForOpen();
+            deductAmount = PlayerDataManager.Instance.openCost;
+            if (!deducted)
+            {
+                Debug.LogWarning("OpenPackage: 尝试扣费失败，已取消开包");
+                return;
+            }
+        }
+        else
+        {
+            Debug.LogWarning("OpenPackage: 未找到 PlayerDataManager，开包将不会扣除金币（建议将 PlayerDataManager 挂到场景）");
+        }
+
+        ClearOldCards();
         Transform parent = cardParent != null ? cardParent : this.transform;
+
+        List<int> drawnIds = new List<int>();
 
         for (int i = 0; i < count; i++)
         {
             var card = GetRandomCardFromStore();
             if (card == null) continue;
+
+            drawnIds.Add(card.Card_ID); // 记录 ID
 
             if (card is MonsterCard monster)
                 CreateMonsterCard(monster, parent);
@@ -61,6 +95,31 @@ public class OpenPackage : MonoBehaviour
                 CreateSpellCard(spell, parent);
             else
                 Debug.LogWarning("OpenPackage: 未知卡片类型，跳过");
+        }
+
+        // 如果使用 PlayerDataManager 且已经扣费，但没有获得任何卡，则退款以避免玩家丢失金币
+        if (usedPlayerManager && deducted && drawnIds.Count == 0)
+        {
+            // 退款：直接返回金币并保存
+            PlayerDataManager.Instance.playerCoins += deductAmount;
+            PlayerDataManager.Instance.SavePlayerData();
+            Debug.LogWarning($"OpenPackage: 未抽到卡片，已为玩家退款 {deductAmount} 金币");
+            return;
+        }
+
+        // 将本次抽到的 id 交给 PlayerDataManager 保存（如果存在）
+        if (drawnIds.Count > 0)
+        {
+            if (PlayerDataManager.Instance != null)
+            {
+                // 默认会追加到 PlayerDataManager.playerCards 并立即保存 CSV（根据 PlayerDataManager 实现）
+                PlayerDataManager.Instance.AddDrawnCards(drawnIds);
+                if (debugMode) Debug.Log($"OpenPackage: 已记录并保存 {drawnIds.Count} 张卡片到 playerdata.csv");
+            }
+            else
+            {
+                Debug.LogWarning("OpenPackage: 找不到 PlayerDataManager，请把脚本挂到场景中");
+            }
         }
     }
 
