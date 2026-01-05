@@ -36,14 +36,13 @@ public class SpellCardDisplay : MonoBehaviour
         }
 
         // 关键修复：向 Tooltip 传递时，交换 effectText 和 bondText
-        var hover = GetComponent<CardHoverDetector>();
+        var hover = GetComponent<CardsTooltip>();
+
         if (hover != null)
         {
-            hover.titleText = s.Card_Name ?? "";  // 标题（不变）
-            // 原错误：hover.effectText = s.Card_Description ?? "";
-            // 原错误：hover.bondText = displayStack;
-            hover.effectText = displayStack;  // 叠放描述 → 传给 Tooltip 的 bond 区域（紫色）
-            hover.bondText = s.Card_Description ?? "";  // 法术描述 → 传给 Tooltip 的 effect 区域（白色）
+            hover.titleText = s.Card_Name ?? "";
+            hover.effectText = displayStack;      // 注意：你的逻辑里交换了 effect/bond
+            hover.bondText = s.Card_Description ?? "";
         }
 
         Debug.Log($"[SpellCardDisplay] Display stack text: '{displayStack}'");

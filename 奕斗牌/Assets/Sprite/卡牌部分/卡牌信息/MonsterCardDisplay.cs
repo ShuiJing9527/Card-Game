@@ -53,12 +53,20 @@ public class MonsterCardDisplay : MonoBehaviour, IPointerEnterHandler, IPointerE
             originalLinkFontSize = linkDescriptionText.fontSize;
         if (mainDescriptionText != null)
             originalMainFontSize = mainDescriptionText.fontSize;
+
+        // 初始时根据 inspector 的 monsterType 更新显示（便于编辑器中可视化）
+        UpdateTypeUI();
     }
 
     // 外部调用：把 MonsterCard 传进来并刷新 UI
     public void SetCard(MonsterCard m)
     {
         if (m == null) return;
+
+        // 同步序列化字段，保证 Inspector 在 Play 模式能显示当前类型
+        this.monsterType = m.MonsterType;
+        // 立即更新类型相关 UI（主标签等）
+        UpdateTypeUI();
 
         // 保存完整文本（用于 tooltip）
         fullMainText = m.Card_Description ?? "";
@@ -79,12 +87,6 @@ public class MonsterCardDisplay : MonoBehaviour, IPointerEnterHandler, IPointerE
         // 属性
         if (attributesText != null)
             attributesText.text = string.IsNullOrEmpty(m.Card_Attributes) ? "" : m.Card_Attributes;
-
-        // 主标签（带中括号）
-        var enumType = m.MonsterType;
-        string mainTypeText = EnumTypeToDisplay(enumType);
-        if (mainLabelText != null)
-            mainLabelText.text = $"【{mainTypeText}】";
 
         // 主描述（效果/判定） - 使用自适应函数处理溢出（会尝试缩小字号以完整显示）
         AdjustTextSizeAndSet(mainDescriptionText, fullMainText, mainShrinkThreshold, mainMinFontSize, ref originalMainFontSize);
@@ -135,13 +137,30 @@ public class MonsterCardDisplay : MonoBehaviour, IPointerEnterHandler, IPointerE
             Debug.LogWarning($"MonsterCardDisplay: 未找到 CardLv 组件，无法显示等级动画 (id={m.Card_ID})");
         }
 
-        var chd = GetComponent<CardHoverDetector>();
+        var chd = GetComponent<CardsTooltip>();
         if (chd != null)
         {
             chd.titleText = m.Card_Name ?? "";
             chd.effectText = fullMainText;
             chd.bondText = fullLinkText;
         }
+    }
+
+    // 更新类型相关的 UI 表示（主标签、可能的图标或样式）
+    public void UpdateTypeUI()
+    {
+        if (mainLabelText != null)
+        {
+            string mainTypeText = EnumTypeToDisplay(this.monsterType);
+            mainLabelText.text = $"【{mainTypeText}】";
+        }
+
+        // TODO: 如果有类型对应的图标、颜色等，在这里同步：
+        // e.g.
+        // if (monsterType == MonsterCardType.Effect) { icon.sprite = effectSprite; }
+        // else if (monsterType == MonsterCardType.Judge) { icon.sprite = judgeSprite; }
+        //
+        // 这样可以保证 Inspector 字段与视觉元素同步
     }
 
     // ---------- 自适应文本逻辑 ----------

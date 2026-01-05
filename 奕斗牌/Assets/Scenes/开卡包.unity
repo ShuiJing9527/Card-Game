@@ -295,11 +295,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 1639797812477658221, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
       propertyPath: m_SizeDelta.x
-      value: 194.4817
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 1639797812477658221, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
       propertyPath: m_SizeDelta.y
-      value: 149.8655
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 1639797812477658221, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
       propertyPath: m_LocalPosition.x
@@ -352,6 +352,10 @@ PrefabInstance:
     - target: {fileID: 4426855505645245655, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
       propertyPath: m_Name
       value: Tooltip
+      objectReference: {fileID: 0}
+    - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
+      propertyPath: m_Enabled
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
       propertyPath: elementColors.Array.data[0].b
@@ -413,6 +417,10 @@ PrefabInstance:
       propertyPath: elementColors.Array.data[5].r
       value: 0.6262168
       objectReference: {fileID: 0}
+    - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
+      propertyPath: requireExtraLinesForDetection
+      value: 1
+      objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
@@ -428,6 +436,7 @@ GameObject:
   m_Component:
   - component: {fileID: 681127557}
   - component: {fileID: 681127556}
+  - component: {fileID: 681127559}
   - component: {fileID: 681127558}
   m_Layer: 0
   m_Name: CardStore
@@ -449,6 +458,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CardDrawStore
   cardData: {fileID: 4900000, guid: 0b7f09b758ad1ef48831d9675522852e, type: 3}
+  textStore: {fileID: 681127559}
+  parseOnStart: 1
 --- !u!4 &681127557
 Transform:
   m_ObjectHideFlags: 0
@@ -484,8 +495,27 @@ MonoBehaviour:
   - {fileID: 9188833186329395536, guid: f44fea8e73ad85042b3125d22be5a9d0, type: 3}
   spellPrefab: {fileID: 8693994883433497810, guid: f050b7f3f6487f94f98151ae24ad2927, type: 3}
   cardDrawStore: {fileID: 681127556}
-  cardParent: {fileID: 0}
-  cardPool: {fileID: 2132544025}
+  textStore: {fileID: 681127559}
+  cardParent: {fileID: 2132544026}
+  addressPrefix: 
+  placeholderSprite: {fileID: 0}
+  debugMode: 1
+  clearTextsBeforeFill: 1
+--- !u!114 &681127559
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 681127555}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9f3991611714c01489cbf8e7a93b6eb4, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CardTextStore
+  csvFile: {fileID: 4900000, guid: 0b7f09b758ad1ef48831d9675522852e, type: 3}
+  parseOnAwake: 1
+  debugMode: 1
 --- !u!1 &1013572115
 GameObject:
   m_ObjectHideFlags: 0
@@ -557,12 +587,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 0cd44c1031e13a943bb63640046fad76, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  m_UiScaleMode: 0
+  m_UiScaleMode: 1
   m_ReferencePixelsPerUnit: 100
   m_ScaleFactor: 1
-  m_ReferenceResolution: {x: 800, y: 600}
+  m_ReferenceResolution: {x: 1920, y: 1080}
   m_ScreenMatchMode: 0
-  m_MatchWidthOrHeight: 0
+  m_MatchWidthOrHeight: 1
   m_PhysicalUnit: 3
   m_FallbackScreenDPI: 96
   m_DefaultSpriteDPI: 96
@@ -730,7 +760,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0.0049744, y: 0}
+  m_AnchoredPosition: {x: 0, y: 0}
   m_SizeDelta: {x: 1920, y: 1080}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &2132544027
@@ -855,7 +885,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5429262843196319172, guid: b2845edd943cce84ab9d08f7a9eeedd4, type: 3}
       propertyPath: m_OnClick.m_PersistentCalls.m_Calls.Array.data[1].m_Mode
-      value: 1
+      value: 3
       objectReference: {fileID: 0}
     - target: {fileID: 5429262843196319172, guid: b2845edd943cce84ab9d08f7a9eeedd4, type: 3}
       propertyPath: m_OnClick.m_PersistentCalls.m_Calls.Array.data[1].m_Target
@@ -872,6 +902,10 @@ PrefabInstance:
     - target: {fileID: 5429262843196319172, guid: b2845edd943cce84ab9d08f7a9eeedd4, type: 3}
       propertyPath: m_OnClick.m_PersistentCalls.m_Calls.Array.data[1].m_TargetAssemblyTypeName
       value: OpenPackage, Assembly-CSharp
+      objectReference: {fileID: 0}
+    - target: {fileID: 5429262843196319172, guid: b2845edd943cce84ab9d08f7a9eeedd4, type: 3}
+      propertyPath: m_OnClick.m_PersistentCalls.m_Calls.Array.data[1].m_Arguments.m_IntArgument
+      value: 5
       objectReference: {fileID: 0}
     - target: {fileID: 5429262843196319172, guid: b2845edd943cce84ab9d08f7a9eeedd4, type: 3}
       propertyPath: m_OnClick.m_PersistentCalls.m_Calls.Array.data[1].m_Arguments.m_ObjectArgumentAssemblyTypeName
