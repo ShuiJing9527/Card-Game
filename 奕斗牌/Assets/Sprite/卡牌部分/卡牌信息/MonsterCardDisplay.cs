@@ -22,38 +22,12 @@ public class MonsterCardDisplay : MonoBehaviour, IPointerEnterHandler, IPointerE
     public TextMeshProUGUI attributesText;
     public TextMeshProUGUI stackCountText;
 
-    [Header("文本溢出缩放设置")]
-    public bool useAutoSizing = false;   // 若启用 TMP 自动缩放则使用 TMP 的 AutoSizing
-    public int linkShrinkThreshold = 40;   // linkDescription 超过多少字符开始缩小（仅用于决定步长）
-    public int mainShrinkThreshold = 80;   // mainDescription 超过多少字符开始缩小（仅用于决定步长）
-    public float linkMinFontSize = 6f;    // link 最小字号
-    public float mainMinFontSize = 6f;    // main 最小字号
-
-    [Header("缩放策略参数 (可在 Inspector 调整)")]
-    public int originalMaxLinesDefault = 2;  // 默认字号下最多行数
-    public int extraAllowedLinesAfterShrink = 2; // 缩小后最多额外允许多少行（default 2 -> 最多 4 行）
-    public float shrinkStepNormal = 1f;   // 常规模拟缩小步长（pt）
-    public float shrinkStepFast = 2f;     // 当文本长度超阈但增量 <=10 时使用更快步长
-
-    [Header("Tooltip 设置")]
-    public float tooltipAboveOffset = 8f; // tooltip 显示在目标上方时的垂直偏移（像素）
-    public bool tooltipPreferMainDescription = true; // 鼠标悬停卡片时优先显示主描述，否则显示羁绊描述
-
-    // 记录原字号以便还原
-    private float originalLinkFontSize = -1f;
-    private float originalMainFontSize = -1f;
-
     // 保存完整文本以供 Tooltip 使用
     private string fullMainText = "";
     private string fullLinkText = "";
 
     void Awake()
     {
-        if (linkDescriptionText != null)
-            originalLinkFontSize = linkDescriptionText.fontSize;
-        if (mainDescriptionText != null)
-            originalMainFontSize = mainDescriptionText.fontSize;
-
         // 初始时根据 inspector 的 monsterType 更新显示（便于编辑器中可视化）
         UpdateTypeUI();
     }
@@ -63,47 +37,34 @@ public class MonsterCardDisplay : MonoBehaviour, IPointerEnterHandler, IPointerE
     {
         if (m == null) return;
 
-        // 同步序列化字段，保证 Inspector 在 Play 模式能显示当前类型
         this.monsterType = m.MonsterType;
-        // 立即更新类型相关 UI（主标签等）
         UpdateTypeUI();
 
-        // 保存完整文本（用于 tooltip）
         fullMainText = m.Card_Description ?? "";
         fullLinkText = string.IsNullOrWhiteSpace(m.Card_LinkEffect) ? "" : m.Card_LinkEffect;
 
-        // 名称
         if (cardNameText != null)
             cardNameText.text = m.Card_Name ?? "";
 
-        // 攻击
         if (attackText != null)
             attackText.text = m.Card_Atk.ToString();
 
-        // 等级
         if (levelText != null)
             levelText.text = $"Lv.{m.Card_Lv}";
 
-        // 属性
         if (attributesText != null)
             attributesText.text = string.IsNullOrEmpty(m.Card_Attributes) ? "" : m.Card_Attributes;
 
-        // 主描述（效果/判定） - 使用自适应函数处理溢出（会尝试缩小字号以完整显示）
-        AdjustTextSizeAndSet(mainDescriptionText, fullMainText, mainShrinkThreshold, mainMinFontSize, ref originalMainFontSize);
+        // 直接赋值完整文本
+        if (mainDescriptionText != null)
+            mainDescriptionText.text = fullMainText;
+        if (linkDescriptionText != null)
+            linkDescriptionText.text = fullLinkText;
 
-        // 羁绊效果文本（保持现有逻辑，但加上缩放处理）
-        AdjustTextSizeAndSet(linkDescriptionText, fullLinkText, linkShrinkThreshold, linkMinFontSize, ref originalLinkFontSize);
-
-        // 仅更新羁绊名节点（linkNameText），并且仅在 Card_Link 有值时覆盖 prefab 文本
         if (linkNameText != null)
         {
             var rawLink = m.Card_Link ?? "";
-
-            if (string.IsNullOrWhiteSpace(rawLink))
-            {
-                // 不覆盖 prefab 内已有的占位文本
-            }
-            else
+            if (!string.IsNullOrWhiteSpace(rawLink))
             {
                 var parsedTypes = ParseTypes(rawLink);
                 var linkName = ExtractNameFromLink(rawLink, parsedTypes);
@@ -123,11 +84,10 @@ public class MonsterCardDisplay : MonoBehaviour, IPointerEnterHandler, IPointerE
             }
         }
 
-        // 叠放数量
         if (stackCountText != null)
             stackCountText.text = $"x{m.StackCount}";
 
-        var cardLv = GetComponentInChildren<CardLv>(true); // 包含 inactive
+        var cardLv = GetComponentInChildren<CardLv>(true);
         if (cardLv != null)
         {
             cardLv.SetLevel(m.Card_Lv);
@@ -146,7 +106,6 @@ public class MonsterCardDisplay : MonoBehaviour, IPointerEnterHandler, IPointerE
         }
     }
 
-    // 更新类型相关的 UI 表示（主标签、可能的图标或样式）
     public void UpdateTypeUI()
     {
         if (mainLabelText != null)
@@ -154,156 +113,31 @@ public class MonsterCardDisplay : MonoBehaviour, IPointerEnterHandler, IPointerE
             string mainTypeText = EnumTypeToDisplay(this.monsterType);
             mainLabelText.text = $"【{mainTypeText}】";
         }
-
-        // TODO: 如果有类型对应的图标、颜色等，在这里同步：
-        // e.g.
-        // if (monsterType == MonsterCardType.Effect) { icon.sprite = effectSprite; }
-        // else if (monsterType == MonsterCardType.Judge) { icon.sprite = judgeSprite; }
-        //
-        // 这样可以保证 Inspector 字段与视觉元素同步
     }
 
-    // ---------- 自适应文本逻辑 ----------
-    // 手动逐步缩小、根据字号决定允许行数，并在最小字号仍超出时显示省略号
-    private void AdjustTextSizeAndSet(TextMeshProUGUI t, string text, int threshold, float minFontSize, ref float originalFontSize)
-    {
-        if (t == null) return;
-
-        // 记录原始字号
-        if (originalFontSize <= 0f) originalFontSize = t.fontSize;
-
-        // 如果启用 TMP AutoSizing，交给 TMP 处理
-        if (useAutoSizing)
-        {
-            t.enableAutoSizing = true;
-            t.fontSizeMax = originalFontSize;
-            t.fontSizeMin = Mathf.Max(6f, minFontSize);
-            t.enableWordWrapping = true;
-            t.richText = true;
-            t.text = text ?? "";
-            Canvas.ForceUpdateCanvases();
-            t.ForceMeshUpdate();
-            t.maxVisibleLines = originalMaxLinesDefault;
-            return;
-        }
-
-        // 使用手动缩放（以字体缩小为主）
-        t.enableAutoSizing = false;
-        t.enableWordWrapping = true;
-        t.richText = true;
-        t.overflowMode = TextOverflowModes.Overflow; // 先允许 overflow 以便测量
-        t.text = text ?? "";
-
-        Canvas.ForceUpdateCanvases();
-        t.ForceMeshUpdate();
-
-        float rectW = t.rectTransform.rect.width;
-        float rectH = t.rectTransform.rect.height;
-
-        // 初始化字体与行数
-        t.fontSize = originalFontSize;
-        t.maxVisibleLines = originalMaxLinesDefault;
-
-        // 测量所需高度（无限高度）
-        Vector2 pref = t.GetPreferredValues(t.text, rectW, 9999f);
-
-        // 若一开始就 fit，则设置为原始样式并返回
-        if (pref.y <= rectH)
-        {
-            t.fontSize = originalFontSize;
-            t.maxVisibleLines = originalMaxLinesDefault;
-            t.overflowMode = TextOverflowModes.Truncate;
-            Canvas.ForceUpdateCanvases();
-            LayoutRebuilder.ForceRebuildLayoutImmediate(t.rectTransform);
-            return;
-        }
-
-        // 计算“超出字符数”的近似（仅用于决定缩小步长）
-        int extraChars = Math.Max(0, (t.text?.Length ?? 0) - threshold);
-
-        // 逐步缩小字体直到 fit 或达到最小字号
-        int safety = 0;
-        while (true)
-        {
-            pref = t.GetPreferredValues(t.text, rectW, 9999f);
-            if (pref.y <= rectH) break;
-            if (t.fontSize <= minFontSize) break;
-            if (safety++ > 400) break;
-
-            float step = (extraChars > 0 && extraChars <= 10) ? shrinkStepFast : shrinkStepNormal;
-            float newSize = Mathf.Max(minFontSize, t.fontSize - step);
-            t.fontSize = newSize;
-
-            // 根据当前字号决定允许的最大行数（如果需要）
-            if (t.fontSize >= originalFontSize)
-            {
-                t.maxVisibleLines = originalMaxLinesDefault;
-            }
-            else
-            {
-                float drop = originalFontSize - t.fontSize;
-                if (drop <= 2f) t.maxVisibleLines = originalMaxLinesDefault + 1;
-                else t.maxVisibleLines = originalMaxLinesDefault + extraAllowedLinesAfterShrink;
-            }
-
-            t.ForceMeshUpdate();
-        }
-
-        // 最终测量
-        pref = t.GetPreferredValues(t.text, rectW, 9999f);
-        if (pref.y > rectH)
-        {
-            // 若仍然超出，使用省略号并保持当前字号/行数
-            t.overflowMode = TextOverflowModes.Ellipsis;
-        }
-        else
-        {
-            t.overflowMode = TextOverflowModes.Truncate;
-        }
-
-        // 强制刷新布局
-        Canvas.ForceUpdateCanvases();
-        LayoutRebuilder.ForceRebuildLayoutImmediate(t.rectTransform);
-    }
-
-    // ---------- 鼠标悬停 (Tooltip) ----------
-    // 当鼠标进入卡片区域时显示 tooltip（在目标文本上方）
+    // 鼠标悬停: 优先主描述，否则羁绊文本；直接调用 TooltipController 显示
     public void OnPointerEnter(PointerEventData eventData)
     {
-        // 优先显示主描述（如果为空则尝试羁绊效果）
         string toShow = null;
         RectTransform targetRect = null;
 
-        if (tooltipPreferMainDescription)
+        if (!string.IsNullOrEmpty(fullMainText) && mainDescriptionText != null)
         {
-            if (!string.IsNullOrEmpty(fullMainText) && mainDescriptionText != null)
-            {
-                toShow = fullMainText;
-                targetRect = mainDescriptionText.rectTransform;
-            }
-            else if (!string.IsNullOrEmpty(fullLinkText) && linkDescriptionText != null)
-            {
-                toShow = fullLinkText;
-                targetRect = linkDescriptionText.rectTransform;
-            }
+            toShow = fullMainText;
+            targetRect = mainDescriptionText.rectTransform;
         }
-        else
+        else if (!string.IsNullOrEmpty(fullLinkText) && linkDescriptionText != null)
         {
-            if (!string.IsNullOrEmpty(fullLinkText) && linkDescriptionText != null)
-            {
-                toShow = fullLinkText;
-                targetRect = linkDescriptionText.rectTransform;
-            }
-            else if (!string.IsNullOrEmpty(fullMainText) && mainDescriptionText != null)
-            {
-                toShow = fullMainText;
-                targetRect = mainDescriptionText.rectTransform;
-            }
+            toShow = fullLinkText;
+            targetRect = linkDescriptionText.rectTransform;
         }
 
         if (!string.IsNullOrEmpty(toShow) && TooltipController.Instance != null && targetRect != null)
         {
-            TooltipController.Instance.ShowAbove(targetRect, toShow, tooltipAboveOffset);
+            // 直接调用 TooltipController 显示（无额外 Inspector 配置）
+            TooltipController.Instance.ShowAbove(targetRect, toShow);
+            // 如果你的 TooltipController 需要偏移参数，请改为：
+            // TooltipController.Instance.ShowAbove(targetRect, toShow, 8f);
         }
     }
 
@@ -313,7 +147,7 @@ public class MonsterCardDisplay : MonoBehaviour, IPointerEnterHandler, IPointerE
             TooltipController.Instance.Hide();
     }
 
-    // ---------- 其余辅助函数（沿用并保留） ----------
+    // 以下为原有辅助方法（ParseTypes / ExtractNameFromLink 等）
     private string EnumTypeToDisplay(MonsterCardType t)
     {
         if (t == MonsterCardType.Effect) return "效果";
