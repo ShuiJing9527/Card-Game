@@ -35,7 +35,7 @@ RectTransform:
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
   m_AnchoredPosition: {x: 3.5646, y: 0}
-  m_SizeDelta: {x: 436.6697, y: 150}
+  m_SizeDelta: {x: 447.8741, y: 166.8066}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!222 &2223791589411892305
 CanvasRenderer:
@@ -92,15 +92,15 @@ MonoBehaviour:
   m_faceColor:
     serializedVersion: 2
     rgba: 4294967295
-  m_fontSize: 28
+  m_fontSize: 25.35
   m_fontSizeBase: 28
   m_fontWeight: 400
-  m_enableAutoSizing: 0
-  m_fontSizeMin: 18
-  m_fontSizeMax: 72
+  m_enableAutoSizing: 1
+  m_fontSizeMin: 20
+  m_fontSizeMax: 60
   m_fontStyle: 0
   m_HorizontalAlignment: 1
-  m_VerticalAlignment: 512
+  m_VerticalAlignment: 256
   m_textAlignment: 65535
   m_characterSpacing: 0
   m_characterHorizontalScale: 1
@@ -246,8 +246,8 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0.0000009536743, y: 0}
-  m_SizeDelta: {x: 194.4817, y: 149.8655}
+  m_AnchoredPosition: {x: 960, y: 540}
+  m_SizeDelta: {x: 0, y: 0}
   m_Pivot: {x: 0.41903222, y: 0.5}
 --- !u!114 &7193509823709973139
 MonoBehaviour:
@@ -256,7 +256,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 4426855505645245655}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: df964556754c29b4b8f5d0623eea630e, type: 3}
   m_Name: 
@@ -266,35 +266,21 @@ MonoBehaviour:
   titleField: {fileID: 0}
   bodyField: {fileID: 3562310373771517849}
   autoBindIfMissing: 1
-  padding: {x: 16, y: 12}
-  maxWidth: 840
-  maxHeight: 220
-  aboveOffset: 8
-  rootSizeDelta: {x: -24, y: -18}
-  extraTextBoxPadding: {x: 0, y: 0}
-  forceTextBoxSize: 1
-  forcedTextBoxSize: {x: 860, y: 240}
-  clampForcedToMax: 1
-  respectInspectorTextBoxSize: 1
   elementColors:
-  - {r: 0.85, g: 0.7, b: 0.45, a: 1}
+  - {r: 0.7660377, g: 0.63087773, b: 0.32809538, a: 1}
   - {r: 0.45, g: 0.8, b: 0.5, a: 1}
-  - {r: 0.45, g: 0.7, b: 0.95, a: 1}
-  - {r: 1, g: 0.55, b: 0.4, a: 1}
-  - {r: 0.9, g: 0.85, b: 0.5, a: 1}
-  - {r: 0.75, g: 0.55, b: 0.95, a: 1}
+  - {r: 0.3832182, g: 0.72246903, b: 0.8792453, a: 1}
+  - {r: 0.94716984, g: 0.27674714, b: 0.2269633, a: 1}
+  - {r: 0.86415094, g: 0.8523069, b: 0.7744749, a: 1}
+  - {r: 0.6262168, g: 0.57087225, b: 0.7433963, a: 1}
   bondTextImage: {fileID: 2525800984600049010}
   forceTopSorting: 1
   sortingOrder: 1000
-  hoverYOffsetMin: 5
-  hoverYOffsetMax: 10
-  horizontalTolerance: 60
-  allowOutsideHoverForDebug: 1
   positionEpsilon: 2
   sizeEpsilon: 1
-  minUpdateInterval: 0.05
+  minUpdateInterval: 0
   ignoreRaycasts: 1
-  debugLogCombined: 1
+  debugLogCombined: 0
   requireExtraLinesForDetection: 1
   bondZoneNameKeywords:
   - bond
@@ -370,11 +356,11 @@ MonoBehaviour:
       m_Calls: []
   m_Sprite: {fileID: 5613279513460729420, guid: 3527a04a22ad15a41b8ddecfebc65213, type: 3}
   m_Type: 0
-  m_PreserveAspect: 0
+  m_PreserveAspect: 1
   m_FillCenter: 1
   m_FillMethod: 4
   m_FillAmount: 1
   m_FillClockwise: 1
   m_FillOrigin: 0
-  m_UseSpriteMesh: 0
+  m_UseSpriteMesh: 1
   m_PixelsPerUnitMultiplier: 1
