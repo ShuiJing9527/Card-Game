@@ -20,12 +20,12 @@ public class TooltipController : MonoBehaviour
     [Header("元素颜色（按顺序：土, 木, 水, 火, 金, Spell）")]
     public Color[] elementColors = new Color[6]
     {
-    new Color(0.85f,0.7f,0.45f,1f), // 土
-    new Color(0.45f,0.8f,0.5f,1f),  // 木
-    new Color(0.45f,0.7f,0.95f,1f), // 水
-    new Color(1f,0.55f,0.4f,1f),    // 火
-    new Color(0.9f,0.85f,0.5f,1f),  // 金
-    new Color(0.75f,0.55f,0.95f,1f) // 术/咒
+new Color(0.85f,0.7f,0.45f,1f), // 土
+new Color(0.45f,0.8f,0.5f,1f),  // 木
+new Color(0.45f,0.7f,0.95f,1f), // 水
+new Color(1f,0.55f,0.4f,1f),    // 火
+new Color(0.9f,0.85f,0.5f,1f),  // 金
+new Color(0.75f,0.55f,0.95f,1f) // 术/咒
     };
 
     [Tooltip("要被改色的 Image（例如 Tooltip 的背景或标识图标）。可留空（则不会改色）。")]
@@ -482,7 +482,7 @@ public class TooltipController : MonoBehaviour
         var lines = body.Split('\n');
         List<string> candidates = new List<string>();
 
-        Regex prefixRegex = new Regex(@"^\s*([\u2460-\u2473]|\d+[\.\)：:，、]|[$\[\{]?\d+[$\]\}]|[①-⑳])\s*");
+        Regex prefixRegex = new Regex(@"^\s*([\u2460-\u2473]|\d+[\.\)：:，、]|[$$$\{]?\d+[$$$\}]|[①-⑳])\s*");
 
         foreach (var raw in lines)
         {

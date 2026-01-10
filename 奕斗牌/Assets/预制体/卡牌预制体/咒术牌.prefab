@@ -1089,6 +1089,7 @@ GameObject:
   - component: {fileID: 8741198852648098148}
   - component: {fileID: 2007394862842364966}
   - component: {fileID: 4051266767204010828}
+  - component: {fileID: 6460603524775908348}
   m_Layer: 5
   m_Name: "\u5492\u672F\u724C"
   m_TagString: Untagged
@@ -1120,7 +1121,7 @@ RectTransform:
   - {fileID: 2874694272345925523}
   - {fileID: 5037039219550624361}
   - {fileID: 697894764900722735}
-  - {fileID: 5854452065561125121}
+  - {fileID: 895896741965872980}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
@@ -1172,6 +1173,19 @@ MonoBehaviour:
   bondText: 
   verticalOffset: 8
   tooltipController: {fileID: 0}
+--- !u!114 &6460603524775908348
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 8693994883433497810}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 70e62dc1982bfc949a2f885b5d08db19, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::ZoomUI
+  zoomSize: 1.2
 --- !u!1 &8728924087847971253
 GameObject:
   m_ObjectHideFlags: 0
@@ -1309,7 +1323,7 @@ MonoBehaviour:
   m_hasFontAssetChanged: 0
   m_baseMaterial: {fileID: 0}
   m_maskOffset: {x: 0, y: 0, z: 0, w: 0}
---- !u!1001 &1056078955381035651
+--- !u!1001 &6050056423878692054
 PrefabInstance:
   m_ObjectHideFlags: 0
   serializedVersion: 2
@@ -1317,17 +1331,29 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 6259878568216063542}
     m_Modifications:
-    - target: {fileID: 157849476687341142, guid: b7f11451ed5ebec428e8048bd5d16e18, type: 3}
-      propertyPath: bondNameTMP
-      value: 
-      objectReference: {fileID: 9015018062692392659}
+    - target: {fileID: 2618506324037726383, guid: b7f11451ed5ebec428e8048bd5d16e18, type: 3}
+      propertyPath: m_fontSize
+      value: 22.35
+      objectReference: {fileID: 0}
     - target: {fileID: 2805467451945773744, guid: b7f11451ed5ebec428e8048bd5d16e18, type: 3}
       propertyPath: m_Name
       value: "\u5361\u7247\u4FE1\u606F"
       objectReference: {fileID: 0}
+    - target: {fileID: 2805467451945773744, guid: b7f11451ed5ebec428e8048bd5d16e18, type: 3}
+      propertyPath: m_IsActive
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 3111457106308772985, guid: b7f11451ed5ebec428e8048bd5d16e18, type: 3}
+      propertyPath: m_SizeDelta.x
+      value: 146.8931
+      objectReference: {fileID: 0}
+    - target: {fileID: 3111457106308772985, guid: b7f11451ed5ebec428e8048bd5d16e18, type: 3}
+      propertyPath: m_AnchoredPosition.x
+      value: 620.5364
+      objectReference: {fileID: 0}
     - target: {fileID: 6888470121871979394, guid: b7f11451ed5ebec428e8048bd5d16e18, type: 3}
       propertyPath: m_LocalPosition.x
-      value: -440
+      value: -460
       objectReference: {fileID: 0}
     - target: {fileID: 6888470121871979394, guid: b7f11451ed5ebec428e8048bd5d16e18, type: 3}
       propertyPath: m_LocalPosition.y
@@ -1365,28 +1391,13 @@ PrefabInstance:
       propertyPath: m_LocalEulerAnglesHint.z
       value: 0
       objectReference: {fileID: 0}
-    - target: {fileID: 9168201178777875284, guid: b7f11451ed5ebec428e8048bd5d16e18, type: 3}
-      propertyPath: m_IsActive
-      value: 1
-      objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: b7f11451ed5ebec428e8048bd5d16e18, type: 3}
---- !u!4 &5854452065561125121 stripped
+--- !u!4 &895896741965872980 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 6888470121871979394, guid: b7f11451ed5ebec428e8048bd5d16e18, type: 3}
-  m_PrefabInstance: {fileID: 1056078955381035651}
+  m_PrefabInstance: {fileID: 6050056423878692054}
   m_PrefabAsset: {fileID: 0}
---- !u!114 &9015018062692392659 stripped
-MonoBehaviour:
-  m_CorrespondingSourceObject: {fileID: 8339599008532139088, guid: b7f11451ed5ebec428e8048bd5d16e18, type: 3}
-  m_PrefabInstance: {fileID: 1056078955381035651}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 0}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f4688fdb7df04437aeb418b961361dc5, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Unity.TextMeshPro::TMPro.TextMeshProUGUI

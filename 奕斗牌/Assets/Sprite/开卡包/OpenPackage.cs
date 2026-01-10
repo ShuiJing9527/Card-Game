@@ -89,12 +89,9 @@ public class OpenPackage : MonoBehaviour
 
             drawnIds.Add(card.Card_ID); // 记录 ID
 
-            if (card is MonsterCard monster)
-                CreateMonsterCard(monster, parent);
-            else if (card is SpellCard spell)
-                CreateSpellCard(spell, parent);
-            else
-                Debug.LogWarning("OpenPackage: 未知卡片类型，跳过");
+            // 使用统一的实例化接口（保持显示一致）
+            // 抽卡界面通常不需要显示卡片信息 -> attachInfo = false
+            InstantiateCardItem(card, parent, 1, false);
         }
 
         // 如果使用 PlayerDataManager 且已经扣费，但没有获得任何卡，则退款以避免玩家丢失金币
@@ -130,71 +127,127 @@ public class OpenPackage : MonoBehaviour
         return cardDrawStore.cardList[idx];
     }
 
+    // 兼容旧的 CreateMonsterCard / CreateSpellCard 调用：现在直接调用 InstantiateCardItem
     void CreateMonsterCard(MonsterCard monster, Transform parent)
     {
-        if (monster == null) return;
-
-        GameObject prefab = GetMonsterPrefabByAttribute(monster.Card_Attributes, monster);
-        if (prefab == null)
-        {
-            Debug.LogWarning($"OpenPackage: 未找到怪兽预制体 (attr={monster.Card_Attributes})");
-            return;
-        }
-
-        GameObject go = Instantiate(prefab, parent);
-        go.name = $"Monster_{monster.Card_ID}_{monster.Card_Name}";
-        go.transform.localScale = Vector3.one;
-        _spawnedCards.Add(go);
-
-        var texts = textStore != null ? textStore.GetCardTexts(monster.Card_ID) : null;
-
-        var displayComp = FindBestDisplayComponent(go, monster);
-        bool used = TryCallSetCardOnBest(displayComp, go, monster, texts);
-
-        if (!used)
-        {
-            if (debugMode) Debug.Log($"OpenPackage: 回退 FillCommonFields for monster id={monster.Card_ID}, name={monster.Card_Name}");
-            if (clearTextsBeforeFill) ClearAllTextFields(go);
-            FillCommonFields(go, monster.Card_Name, monster.Card_Attributes,
-                monster.Card_Atk.ToString(), $"Lv.{monster.Card_Lv}", texts, isSpell: false);
-        }
-
-        SetCardImage(go, monster.Card_ID.ToString());
-
-        if (debugMode) DumpAllTextFields(go, "After CreateMonsterCard");
+        InstantiateCardItem(monster, parent, 1, false);
     }
 
     void CreateSpellCard(SpellCard spell, Transform parent)
     {
-        if (spell == null) return;
-        if (spellPrefab == null)
-        {
-            Debug.LogWarning("OpenPackage: spellPrefab 未设置");
-            return;
-        }
-
-        GameObject go = Instantiate(spellPrefab, parent);
-        go.name = $"Spell_{spell.Card_ID}_{spell.Card_Name}";
-        go.transform.localScale = Vector3.one;
-        _spawnedCards.Add(go);
-
-        var texts = textStore != null ? textStore.GetCardTexts(spell.Card_ID) : null;
-
-        var displayComp = FindBestDisplayComponent(go, spell);
-        bool used = TryCallSetCardOnBest(displayComp, go, spell, texts);
-
-        if (!used)
-        {
-            if (debugMode) Debug.Log($"OpenPackage: 回退 FillCommonFields for spell id={spell.Card_ID}, name={spell.Card_Name}");
-            if (clearTextsBeforeFill) ClearAllTextFields(go);
-            string magic = texts != null ? texts.MagicDescription : spell.Card_Description;
-            FillCommonFields(go, spell.Card_Name, null, null, null, texts, isSpell: true, magicOnly: true);
-        }
-
-        SetCardImage(go, spell.Card_ID.ToString());
-
-        if (debugMode) DumpAllTextFields(go, "After CreateSpellCard");
+        InstantiateCardItem(spell, parent, 1, false);
     }
+
+    // ============ 新增：对外可复用的实例化方法 ============
+    // card: CardMessage（MonsterCard 或 SpellCard）
+    // parent: 放置父节点（null => cardParent 或 this.transform）
+    // count: 显示数量（用于 CardCounter）
+    // attachInfo: 是否强制附加 cardInfo（即启用并初始化 CardCounter 子对象）
+    public GameObject InstantiateCardItem(CardMessage card, Transform parent = null, int count = 1, bool attachInfo = false)
+    {
+        if (card == null) return null;
+        if (parent == null) parent = cardParent != null ? cardParent : this.transform;
+
+        if (card is MonsterCard monster)
+        {
+            GameObject prefab = GetMonsterPrefabByAttribute(monster.Card_Attributes, monster);
+            if (prefab == null)
+            {
+                Debug.LogWarning($"OpenPackage.InstantiateCardItem: 未找到 monster prefab (attr={monster.Card_Attributes}) id={monster.Card_ID}");
+                return null;
+            }
+            GameObject go = Instantiate(prefab, parent, false);
+            go.name = $"Monster_{monster.Card_ID}_{monster.Card_Name}";
+            go.transform.localScale = Vector3.one;
+            _spawnedCards.Add(go);
+
+            var texts = textStore != null ? textStore.GetCardTexts(monster.Card_ID) : null;
+
+            var displayComp = FindBestDisplayComponent(go, monster);
+            bool used = TryCallSetCardOnBest(displayComp, go, monster, texts);
+
+            if (!used)
+            {
+                if (debugMode) Debug.Log($"OpenPackage.InstantiateCardItem: 回退 FillCommonFields for monster id={monster.Card_ID}");
+                if (clearTextsBeforeFill) ClearAllTextFields(go);
+                FillCommonFields(go, monster.Card_Name, monster.Card_Attributes,
+                    monster.Card_Atk.ToString(), $"Lv.{monster.Card_Lv}", texts, isSpell: false);
+            }
+
+            SetCardImage(go, monster.Card_ID.ToString());
+
+            // 如果 prefab 内含 CardCounter，按照 attachInfo 决定是否启用并初始化
+            var existingCounter = go.GetComponentInChildren<CardCounter>(true);
+            if (existingCounter != null)
+            {
+                if (attachInfo)
+                {
+                    try { existingCounter.gameObject.SetActive(true); } catch { }
+                    CardCounter.EffectType et = CardCounter.EffectType.Effect;
+                    try { if (monster.MonsterType == MonsterCardType.Judge) et = CardCounter.EffectType.Judge; } catch { }
+                    existingCounter.SetInfo(monster.Card_ID, monster.Card_Name ?? "", et, count, null);
+                }
+                else
+                {
+                    try { existingCounter.gameObject.SetActive(false); } catch { }
+                }
+            }
+
+            if (debugMode) DumpAllTextFields(go, "InstantiateCardItem(Monster) after fill");
+            return go;
+        }
+        else if (card is SpellCard spell)
+        {
+            if (spellPrefab == null)
+            {
+                Debug.LogWarning("OpenPackage.InstantiateCardItem: spellPrefab 未设置");
+                return null;
+            }
+
+            GameObject go = Instantiate(spellPrefab, parent, false);
+            go.name = $"Spell_{spell.Card_ID}_{spell.Card_Name}";
+            go.transform.localScale = Vector3.one;
+            _spawnedCards.Add(go);
+
+            var texts = textStore != null ? textStore.GetCardTexts(spell.Card_ID) : null;
+
+            var displayComp = FindBestDisplayComponent(go, spell);
+            bool used = TryCallSetCardOnBest(displayComp, go, spell, texts);
+
+            if (!used)
+            {
+                if (debugMode) Debug.Log($"OpenPackage.InstantiateCardItem: 回退 FillCommonFields for spell id={spell.Card_ID}");
+                if (clearTextsBeforeFill) ClearAllTextFields(go);
+                string magic = texts != null ? texts.MagicDescription : spell.Card_Description;
+                FillCommonFields(go, spell.Card_Name, null, null, null, texts, isSpell: true, magicOnly: true);
+            }
+
+            SetCardImage(go, spell.Card_ID.ToString());
+
+            var existingCounterSpell = go.GetComponentInChildren<CardCounter>(true);
+            if (existingCounterSpell != null)
+            {
+                if (attachInfo)
+                {
+                    try { existingCounterSpell.gameObject.SetActive(true); } catch { }
+                    existingCounterSpell.SetInfo(spell.Card_ID, spell.Card_Name ?? "", CardCounter.EffectType.Other, count, null);
+                }
+                else
+                {
+                    try { existingCounterSpell.gameObject.SetActive(false); } catch { }
+                }
+            }
+
+            if (debugMode) DumpAllTextFields(go, "InstantiateCardItem(Spell) after fill");
+            return go;
+        }
+        else
+        {
+            Debug.LogWarning("OpenPackage.InstantiateCardItem: 未知卡片类型，无法实例化");
+            return null;
+        }
+    }
+    // ======================================================
 
     MonoBehaviour FindBestDisplayComponent(GameObject go, CardMessage card)
     {
@@ -417,9 +470,9 @@ public class OpenPackage : MonoBehaviour
         string stackText = (texts != null && !string.IsNullOrEmpty(texts.StackDescription)) ? texts.StackDescription : "";
 
         string[] tmpCandidates = new string[] {
-            "stackDescriptionText", "stackEffect", "叠放效果", "StackText", "stackText",
-            "StackDescription", "Stack", "叠放"
-        };
+        "stackDescriptionText", "stackEffect", "叠放效果", "StackText", "stackText",
+        "StackDescription", "Stack", "叠放"
+    };
 
         foreach (var nameCandidate in tmpCandidates)
         {

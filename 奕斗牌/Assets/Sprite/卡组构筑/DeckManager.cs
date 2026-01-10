@@ -1,754 +1,493 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text;
-using System.Text.RegularExpressions;
 using UnityEngine;
-using UnityEngine.UI;
-using UnityEngine.AddressableAssets;
-using UnityEngine.ResourceManagement.AsyncOperations;
-using UnityEngine.SceneManagement;
 
 public class DeckManager : MonoBehaviour
 {
-    [Header("CSV Inputs")]
-    public TextAsset cardDataCsv;
+    [Header("Source / UI")]
+    public LibraryManage librarySource;     // optional: reference to LibraryManage (editor auto-bind)
+    public RectTransform deckPanel;        // UI parent (must bind)
+    public GameObject deckEntryPrefab;     // optional wrapper prefab per row
+
+    [Header("Fallback CSV (if no PlayerDataManager)")]
     public TextAsset playerDataCsv;
 
-    [Header("UI")]
-    public RectTransform libraryPanel;
-
-    [Header("Prefabs")]
-    public List<GameObject> monsterPrefabs = new List<GameObject>();
-    public GameObject spellPrefab;
-
-    [Header("Card Info (per-card, optional)")]
-    public GameObject cardInfoPrefab; // optional per-card info prefab
-    public bool onlyInstantiateInfoInPoolScene = true;
-    public string poolSceneName = "CardPoolScene";
-    public bool defaultShowInfo = true;
-
-    [Header("Card Art Loading")]
-    public bool useAddressables = true;
-    public bool useResourcesForCardArts = true;
-
-    private Dictionary<int, Sprite> _cardArtCache = new Dictionary<int, Sprite>();
-    private Dictionary<string, AsyncOperationHandle<Sprite>> _addressableHandles = new Dictionary<string, AsyncOperationHandle<Sprite>>();
-
-    [Header("Options")]
+    [Header("Runtime Options")]
     public bool clearOnStart = true;
 
-    private Dictionary<int, MonsterCard> _monsterDefs = new Dictionary<int, MonsterCard>();
-    private Dictionary<int, (SpellCard spell, string stackDesc)> _spellDefs = new Dictionary<int, (SpellCard, string)>();
+    // If true, ensure CardCounter / card-info UI is hidden on deck items
+    public bool hideCardInfoInDeck = true;
+
+    private CardStore _cardStore;
+    private OpenPackage _openPackage;
+    private PlayerDataManager _playerDataManager;
+
+    void OnValidate()
+    {
+        if (librarySource == null) librarySource = FindObjectOfType<LibraryManage>();
+        if (_cardStore == null)
+        {
+            if (CardStore.Instance != null) _cardStore = CardStore.Instance;
+            else
+            {
+                var cs = FindObjectOfType<CardStore>();
+                if (cs != null) _cardStore = cs;
+            }
+        }
+
+        if (_openPackage == null && _cardStore != null)
+            _open_package_try_bind_from_cardstore();
+
+        if (_openPackage == null)
+        {
+            var op2 = FindObjectOfType<OpenPackage>();
+            if (op2 != null) _openPackage = op2;
+        }
+
+        if (_playerDataManager == null)
+        {
+            var pd = FindObjectOfType<PlayerDataManager>();
+            if (pd != null) _playerDataManager = pd;
+        }
+    }
+
+    void Reset() { OnValidate(); }
+
+    void _open_package_try_bind_from_cardstore()
+    {
+        try { _openPackage = _cardStore.GetComponent<OpenPackage>(); } catch { _openPackage = null; }
+    }
 
     void Start()
     {
-        if (cardDataCsv == null)
+        if (deckPanel == null)
         {
-            Debug.LogError("[DeckManager] cardDataCsv 未绑定！");
+            Debug.LogError("[DeckManager] deckPanel 未绑定！");
             return;
         }
-        if (playerDataCsv == null)
-        {
-            Debug.LogError("[DeckManager] playerDataCsv 未绑定！");
-            return;
-        }
-        if (libraryPanel == null)
-        {
-            Debug.LogError("[DeckManager] libraryPanel 未绑定！");
-            return;
-        }
-        if ((monsterPrefabs == null || monsterPrefabs.Count == 0) && spellPrefab == null)
-        {
-            Debug.LogWarning("[DeckManager] 未绑定任何 prefab（monsterPrefabs 或 spellPrefab），将无法实例化 UI。");
-        }
 
-        if (clearOnStart) ClearLibrary();
+        if (librarySource == null) librarySource = FindObjectOfType<LibraryManage>();
+        if (_cardStore == null && CardStore.Instance != null) _cardStore = CardStore.Instance;
+        if (_playerDataManager == null && PlayerDataManager.Instance != null) _playerDataManager = PlayerDataManager.Instance;
 
-        ParseCardData(cardDataCsv.text);
-        BuildLibraryFromPlayerData(playerDataCsv.text);
+        // Prefer OpenPackage on CardStore (your setup)
+        if (_openPackage == null && _cardStore != null) _open_package_try_bind_from_cardstore();
+        if (_openPackage == null) _openPackage = FindObjectOfType<OpenPackage>();
+
+        if (clearOnStart) ClearDeckPanel();
+
+        StartCoroutine(WaitThenBuild());
     }
 
-    void OnDestroy()
+    IEnumerator WaitThenBuild()
     {
-        foreach (var kv in _addressableHandles)
+        float timeout = 3f;
+        float t = 0f;
+        bool readyFlag = false;
+        Action onReadyHandler = null;
+
+        Func<CardStore, bool> isReady = (cs) =>
         {
-            var h = kv.Value;
-            if (h.IsValid())
+            if (cs == null) return true;
+            try
             {
-                try { Addressables.Release(h); } catch { }
-            }
-        }
-        _addressableHandles.Clear();
-        _cardArtCache.Clear();
-    }
-
-    void ParseCardData(string text)
-    {
-        _monsterDefs.Clear();
-        _spellDefs.Clear();
-
-        var rows = ParseCsvRecords(text);
-        foreach (var row in rows)
-        {
-            if (row == null || row.Count == 0) continue;
-            var first = (row[0] ?? "").Trim();
-            if (string.IsNullOrEmpty(first)) continue;
-            if (first.StartsWith("#")) continue;
-
-            if (first.Equals("monster", StringComparison.OrdinalIgnoreCase))
-            {
-                if (row.Count < 10)
+                var prop = cs.GetType().GetProperty("IsCardsReady");
+                if (prop != null)
                 {
-                    Debug.LogWarning("[DeckManager] monster 行字段数不足，跳过行: " + string.Join(",", row));
-                    continue;
+                    var v = prop.GetValue(cs);
+                    if (v is bool b) return b;
                 }
-                if (!int.TryParse(row[1], out int id))
+                var field = cs.GetType().GetField("cardList", BindingFlags.Public | BindingFlags.Instance);
+                if (field != null)
                 {
-                    Debug.LogWarning("[DeckManager] monster 行 CardID 无法解析: " + row[1]);
-                    continue;
-                }
-                string name = row[2];
-                string attributes = row[3];
-                int lv = TryParseInt(row[4], 1);
-                int atk = TryParseInt(row[5], 0);
-                string link = row[6];
-                string linkDesc = row[7];
-                string typeLabel = row[8] ?? "";
-                string mainDesc = row[9] ?? "";
-
-                MonsterCardType mtype = MonsterCardType.Effect;
-                if (typeLabel.IndexOf("Judge", StringComparison.OrdinalIgnoreCase) >= 0 || typeLabel.Contains("判定")) mtype = MonsterCardType.Judge;
-                else mtype = MonsterCardType.Effect;
-
-                var mc = new MonsterCard(
-                    id: id,
-                    name: name,
-                    description: mainDesc,
-                    type: "monster",
-                    atk: atk,
-                    lv: lv,
-                    attributes: attributes,
-                    link: link,
-                    linkEffect: linkDesc,
-                    costs: null,
-                    monsterType: mtype
-                );
-                mc.StackCount = 1;
-                _monsterDefs[id] = mc;
-            }
-            else if (first.Equals("spell", StringComparison.OrdinalIgnoreCase))
-            {
-                if (row.Count < 3)
-                {
-                    Debug.LogWarning("[DeckManager] spell 行字段数不足，跳过行: " + string.Join(",", row));
-                    continue;
-                }
-                if (!int.TryParse(row[1], out int id))
-                {
-                    Debug.LogWarning("[DeckManager] spell 行 CardID 无法解析: " + row[1]);
-                    continue;
-                }
-                string name = row.Count > 2 ? row[2] : "";
-                string magicDesc = row.Count > 3 ? row[3] : "";
-                string stackDesc = row.Count > 4 ? row[4] : "";
-
-                var sc = new SpellCard(id, name, magicDesc, "spell", true, true, null);
-                sc.StackCount = 1;
-                _spellDefs[id] = (sc, stackDesc);
-            }
-            else
-            {
-                continue;
-            }
-        }
-
-        Debug.Log($"[DeckManager] 解析卡片定义完成：Monster {_monsterDefs.Count}，Spell {_spellDefs.Count}");
-    }
-
-    bool ShouldAttachCardInfo()
-    {
-        if (!defaultShowInfo) return false;
-        if (!onlyInstantiateInfoInPoolScene) return true;
-        return SceneManager.GetActiveScene().name == poolSceneName;
-    }
-
-    void BuildLibraryFromPlayerData(string text)
-    {
-        var rows = ParseCsvRecords(text);
-        int created = 0;
-
-        // build playerCounts first
-        var playerCounts = new Dictionary<int, int>();
-        foreach (var row in rows)
-        {
-            if (row == null || row.Count == 0) continue;
-            var first = (row[0] ?? "").Trim();
-            if (string.IsNullOrEmpty(first)) continue;
-            if (first.StartsWith("#")) continue;
-
-            if (first.Equals("card", StringComparison.OrdinalIgnoreCase))
-            {
-                if (row.Count < 3) continue;
-                if (!int.TryParse(row[1], out int cardId)) continue;
-                int count = TryParseInt(row[2], 0);
-                if (count <= 0) continue;
-                if (playerCounts.ContainsKey(cardId)) playerCounts[cardId] += count; else playerCounts[cardId] = count;
-            }
-        }
-
-        CardCounter.SetPlayerCounts(playerCounts);
-
-        bool attachInfo = ShouldAttachCardInfo();
-
-        foreach (var row in rows)
-        {
-            if (row == null || row.Count == 0) continue;
-            var first = (row[0] ?? "").Trim();
-            if (string.IsNullOrEmpty(first)) continue;
-            if (first.StartsWith("#")) continue;
-
-            if (first.Equals("coins", StringComparison.OrdinalIgnoreCase))
-            {
-                if (row.Count >= 2 && int.TryParse(row[1], out int coins))
-                    Debug.Log($"[DeckManager] 玩家金币: {coins}");
-                continue;
-            }
-
-            if (first.Equals("card", StringComparison.OrdinalIgnoreCase))
-            {
-                if (row.Count < 3)
-                {
-                    Debug.LogWarning("[DeckManager] player card 行字段不足: " + string.Join(",", row));
-                    continue;
-                }
-                if (!int.TryParse(row[1], out int cardId))
-                {
-                    Debug.LogWarning("[DeckManager] player card ID 解析失败: " + row[1]);
-                    continue;
-                }
-                int count = TryParseInt(row[2], 0);
-                if (count <= 0) continue;
-
-                if (_monsterDefs.TryGetValue(cardId, out MonsterCard mcDef))
-                {
-                    GameObject prefab = ChooseMonsterPrefabByAttribute(mcDef.Card_Attributes);
-                    if (prefab == null)
+                    var v = field.GetValue(cs) as System.Collections.IEnumerable;
+                    if (v != null)
                     {
-                        Debug.LogWarning($"[DeckManager] 未找到怪兽 prefab, cardId={cardId} attr={mcDef.Card_Attributes}");
-                        continue;
+                        foreach (var _ in v) return true;
+                        return false;
                     }
-                    var go = Instantiate(prefab, libraryPanel, false);
-                    go.name = $"Monster_{cardId}{mcDef.Card_Name}";
-                    go.transform.localScale = Vector3.one;
-
-                    ClearPrefabArt(go);
-
-                    var mcInstance = CloneMonsterCardForPlayer(mcDef, count);
-                    var md = go.GetComponent<MonsterCardDisplay>();
-                    if (md != null)
-                    {
-                        md.SetCard(mcInstance);
-                        StartCoroutine(ApplyCardArtCoroutine(go, cardId));
-                        Debug.Log($"[DeckManager] Instantiated prefab={prefab.name} for id={cardId} name={mcDef.Card_Name} attr={mcDef.Card_Attributes}");
-                    }
-                    else
-                    {
-                        Debug.LogWarning($"[DeckManager] monster prefab 缺少 MonsterCardDisplay，无法注入数据 (id={cardId})");
-                    }
-
-                    var existingCounter = go.GetComponentInChildren<CardCounter>(true);
-                    if (existingCounter != null)
-                    {
-                        Debug.Log($"[DeckManager] Found existing CardCounter in prefab for id={cardId}, will SetInfo on it");
-                        string bondName = mcDef.Card_Name ?? "";
-                        CardCounter.EffectType et = CardCounter.EffectType.Effect;
-                        try
-                        {
-                            if (mcDef != null && mcDef.MonsterType == MonsterCardType.Judge)
-                                et = CardCounter.EffectType.Judge;
-                        }
-                        catch { }
-                        existingCounter.SetInfo(cardId, bondName, et, count, null);
-                    }
-                    else if (attachInfo && cardInfoPrefab != null)
-                    {
-                        var infoGO = Instantiate(cardInfoPrefab, go.transform, false);
-                        infoGO.name = "CardInfo";
-                        var rt = infoGO.GetComponent<RectTransform>();
-                        if (rt != null) rt.anchoredPosition = Vector2.zero;
-
-                        var counter = infoGO.GetComponent<CardCounter>();
-                        Debug.Log($"[DeckManager] Instantiated CardInfo prefab for id={cardId} prefabHasCounter={(counter != null)} bondName='{(mcDef != null ? mcDef.Card_Name : "")}' count={count}");
-                        if (counter != null)
-                        {
-                            string bondName = mcDef.Card_Name ?? "";
-
-                            CardCounter.EffectType et = CardCounter.EffectType.Effect;
-                            try
-                            {
-                                if (mcDef != null && mcDef.MonsterType == MonsterCardType.Judge)
-                                    et = CardCounter.EffectType.Judge;
-                            }
-                            catch { /* ignore */ }
-
-                            Debug.Log($"[DeckManager] Calling SetInfo(id={cardId}, bond='{bondName}', effect={et}, count={count}) on CardCounter");
-                            counter.SetInfo(cardId, bondName, et, count, null);
-                            Debug.Log($"[DeckManager] After SetInfo -> counter.cardId={counter.cardId} overrideCount={count}");
-                        }
-                        else
-                        {
-                            Debug.LogWarning("[DeckManager] cardInfoPrefab 未包含 CardCounter 组件，无法初始化数量/名称显示。");
-                        }
-                    }
-
-                    created++;
-                }
-                else if (_spellDefs.TryGetValue(cardId, out var spTuple))
-                {
-                    GameObject prefab = spellPrefab;
-                    if (prefab == null)
-                    {
-                        Debug.LogWarning($"[DeckManager] 未绑定 spellPrefab, cardId={cardId}");
-                        continue;
-                    }
-                    var go = Instantiate(prefab, libraryPanel, false);
-                    go.name = $"Spell_{cardId}{spTuple.spell.Card_Name}";
-                    go.transform.localScale = Vector3.one;
-                    ClearPrefabArt(go);
-
-                    var scDef = spTuple.spell;
-                    string stackDesc = spTuple.stackDesc ?? "";
-                    scDef.StackCount = count;
-                    var sd = go.GetComponent<SpellCardDisplay>();
-                    if (sd != null)
-                    {
-                        sd.SetCard(scDef, stackDesc);
-                        StartCoroutine(ApplyCardArtCoroutine(go, cardId));
-                    }
-                    else
-                    {
-                        Debug.LogWarning($"[DeckManager] spell prefab 缺少 SpellCardDisplay, 无法注入数据 (id={cardId})");
-                    }
-
-                    // For spells: set as Other and use SetInfo to include name and id
-                    var existingCounterSpell = go.GetComponentInChildren<CardCounter>(true);
-                    if (existingCounterSpell != null)
-                    {
-                        Debug.Log($"[DeckManager] Found existing CardCounter in spell prefab for id={cardId}, will SetInfo on it");
-                        existingCounterSpell.SetInfo(cardId, scDef.Card_Name ?? "", CardCounter.EffectType.Other, count, null);
-                    }
-                    else if (attachInfo && cardInfoPrefab != null)
-                    {
-                        var infoGO = Instantiate(cardInfoPrefab, go.transform, false);
-                        infoGO.name = "CardInfo";
-                        var rt = infoGO.GetComponent<RectTransform>();
-                        if (rt != null) rt.anchoredPosition = Vector2.zero;
-
-                        var counter = infoGO.GetComponent<CardCounter>();
-                        Debug.Log($"[DeckManager] Instantiated CardInfo prefab for spell id={cardId} prefabHasCounter={(counter != null)} bondName='{(scDef != null ? scDef.Card_Name : "")}' count={count}");
-                        if (counter != null)
-                        {
-                            counter.SetInfo(cardId, scDef.Card_Name ?? "", CardCounter.EffectType.Other, count, null);
-                            Debug.Log($"[DeckManager] After SetInfo -> counter.cardId={counter.cardId} overrideCount={count} effectType={counter.effectType}");
-                        }
-                        else
-                        {
-                            Debug.LogWarning("[DeckManager] cardInfoPrefab 未包含 CardCounter 组件，无法初始化数量/名称显示。");
-                        }
-                    }
-
-                    created++;
-                }
-                else
-                {
-                    Debug.LogWarning($"[DeckManager] 玩家持有的卡片 id 未在 CardData 中找到定义: {cardId}");
                 }
             }
-            else
-            {
-                continue;
-            }
-        }
-
-        Debug.Log($"[DeckManager] 已生成卡片项: {created}");
-        Canvas.ForceUpdateCanvases();
-        LayoutRebuilder.ForceRebuildLayoutImmediate(libraryPanel);
-    }
-
-    GameObject ChooseMonsterPrefabByAttribute(string attr)
-    {
-        if (monsterPrefabs == null || monsterPrefabs.Count == 0) return null;
-        if (string.IsNullOrEmpty(attr)) return monsterPrefabs[0];
-
-        string a = attr.Trim();
-        int idx = -1;
-
-        if (a.Equals("土", StringComparison.OrdinalIgnoreCase) || a.IndexOf("earth", StringComparison.OrdinalIgnoreCase) >= 0) idx = 0;
-        else if (a.Equals("木", StringComparison.OrdinalIgnoreCase) || a.IndexOf("wood", StringComparison.OrdinalIgnoreCase) >= 0) idx = 1;
-        else if (a.Equals("水", StringComparison.OrdinalIgnoreCase) || a.IndexOf("water", StringComparison.OrdinalIgnoreCase) >= 0) idx = 2;
-        else if (a.Equals("火", StringComparison.OrdinalIgnoreCase) || a.IndexOf("fire", StringComparison.OrdinalIgnoreCase) >= 0) idx = 3;
-        else if (a.Equals("金", StringComparison.OrdinalIgnoreCase) || a.IndexOf("gold", StringComparison.OrdinalIgnoreCase) >= 0 || a.IndexOf("metal", StringComparison.OrdinalIgnoreCase) >= 0) idx = 4;
-
-        if (idx == -1)
-        {
-            if (a.Contains("土")) idx = 0;
-            else if (a.Contains("木")) idx = 1;
-            else if (a.Contains("水")) idx = 2;
-            else if (a.Contains("火")) idx = 3;
-            else if (a.Contains("金")) idx = 4;
-        }
-
-        if (idx == -1) idx = Mathf.Abs(a.GetHashCode()) % monsterPrefabs.Count;
-        idx = Mathf.Clamp(idx, 0, monsterPrefabs.Count - 1);
-
-        Debug.Log($"ChooseMonsterPrefabByAttribute -> attr='{attr}', idx={idx}, prefab={monsterPrefabs[idx].name}");
-        return monsterPrefabs[idx];
-    }
-
-    void ClearPrefabArt(GameObject root)
-    {
-        if (root == null) return;
-
-        string[] artNames = new[] {
-            "art", "artimage", "cardart", "artwork", "image_art", "spriteart",
-            "art_img", "artImage", "Art",
-            "卡图", "卡面", "卡牌图"
+            catch { }
+            return true;
         };
 
-        var images = root.GetComponentsInChildren<Image>(true);
-        foreach (var img in images)
-        {
-            if (img == null) continue;
-            var nm = img.gameObject.name ?? "";
-            foreach (var k in artNames)
-            {
-                if (!string.IsNullOrEmpty(k) && nm.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    img.sprite = null;
-                    Debug.Log($"ClearPrefabArt: cleared Image sprite on '{nm}' (matched='{k}')");
-                    break;
-                }
-            }
-        }
-
-        var raws = root.GetComponentsInChildren<UnityEngine.UI.RawImage>(true);
-        foreach (var ri in raws)
-        {
-            if (ri == null) continue;
-            var nm = ri.gameObject.name ?? "";
-            foreach (var k in artNames)
-            {
-                if (!string.IsNullOrEmpty(k) && nm.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    ri.texture = null;
-                    Debug.Log($"ClearPrefabArt: cleared RawImage texture on '{nm}' (matched='{k}')");
-                    break;
-                }
-            }
-        }
-    }
-
-    IEnumerator ApplyCardArtCoroutine(GameObject instance, int cardId)
-    {
-        if (instance == null) yield break;
-
-        Sprite sprite = null;
-        if (_cardArtCache.TryGetValue(cardId, out sprite) && sprite != null)
-        {
-            ApplySpriteToInstance(instance, sprite, cardId);
-            yield break;
-        }
-
-        bool loaded = false;
-
-        if (useAddressables)
-        {
-            string address = cardId.ToString();
-
-            if (_addressableHandles.TryGetValue(address, out var existingHandle))
-            {
-                if (!existingHandle.IsDone)
-                {
-                    yield return existingHandle;
-                }
-
-                if (existingHandle.Status == AsyncOperationStatus.Succeeded && existingHandle.Result != null)
-                {
-                    sprite = existingHandle.Result;
-                    _cardArtCache[cardId] = sprite;
-                    ApplySpriteToInstance(instance, sprite, cardId);
-                    yield break;
-                }
-                try { if (existingHandle.IsValid()) Addressables.Release(existingHandle); } catch { }
-                _addressableHandles.Remove(address);
-            }
-
-            var handle = Addressables.LoadAssetAsync<Sprite>(address);
-            _addressableHandles[address] = handle;
-            yield return handle;
-
-            if (handle.Status == AsyncOperationStatus.Succeeded && handle.Result != null)
-            {
-                sprite = handle.Result;
-                _cardArtCache[cardId] = sprite;
-                loaded = true;
-            }
-            else
-            {
-                try { if (handle.IsValid()) Addressables.Release(handle); } catch { }
-                _addressableHandles.Remove(address);
-                Debug.Log($"ApplyCardArt: Addressables 未找到或加载失败 address='{address}' (id={cardId})");
-            }
-        }
-
-        if (!loaded && useResourcesForCardArts)
+        if (_cardStore != null && !isReady(_cardStore))
         {
             try
             {
-                var path = $"CardArts/{cardId}";
-                var rs = Resources.Load<Sprite>(path);
-                if (rs != null)
+                onReadyHandler = new Action(() => { readyFlag = true; });
+                _cardStore.OnCardsReady += onReadyHandler;
+            }
+            catch { onReadyHandler = null; }
+        }
+        else readyFlag = true;
+
+        while (!readyFlag && t < timeout)
+        {
+            if (_cardStore == null && CardStore.Instance != null)
+            {
+                _cardStore = CardStore.Instance;
+                if (_openPackage == null) _open_package_try_bind_from_cardstore();
+            }
+            if (_cardStore != null && isReady(_cardStore))
+            {
+                readyFlag = true;
+                break;
+            }
+            t += Time.unscaledDeltaTime;
+            yield return null;
+        }
+
+        if (onReadyHandler != null && _cardStore != null)
+        {
+            try { _cardStore.OnCardsReady -= onReadyHandler; } catch { }
+        }
+
+        if (_playerDataManager == null && PlayerDataManager.Instance != null) _playerDataManager = PlayerDataManager.Instance;
+
+        BuildDeckFromPlayerData();
+        yield break;
+    }
+
+    void BuildDeckFromPlayerData()
+    {
+        var deckCounts = new Dictionary<int, int>();
+        string usedSource = "none";
+
+        // 1) Try PlayerDataManager (strict: only deck-related members)
+        if (_playerDataManager != null)
+        {
+            try
+            {
+                var pd = _playerDataManager;
+
+                // 1.a Try property: playerDeckDict / PlayerDeckDict
+                var prop = pd.GetType().GetProperty("playerDeckDict") ?? pd.GetType().GetProperty("PlayerDeckDict");
+                if (prop != null)
                 {
-                    sprite = rs;
-                    _cardArtCache[cardId] = sprite;
-                    loaded = true;
+                    var dictObj = prop.GetValue(pd) as System.Collections.IDictionary;
+                    if (dictObj != null)
+                    {
+                        foreach (var k in dictObj.Keys)
+                        {
+                            int id = Convert.ToInt32(k);
+                            int cnt = Convert.ToInt32(dictObj[k]);
+                            if (cnt > 0) deckCounts[id] = cnt;
+                        }
+                        if (deckCounts.Count > 0) usedSource = "PlayerDataManager.property.playerDeckDict";
+                    }
                 }
-                else
+
+                // 1.b Try field: playerDeck / PlayerDeck (array or similar)
+                if (deckCounts.Count == 0)
                 {
-                    Debug.Log($"ApplyCardArt: Resources 未找到 CardArts/{cardId}");
+                    var f = pd.GetType().GetField("playerDeck") ?? pd.GetType().GetField("PlayerDeck");
+                    if (f != null)
+                    {
+                        var arr = f.GetValue(pd) as int[];
+                        if (arr != null)
+                        {
+                            for (int i = 0; i < arr.Length; i++)
+                                if (arr[i] > 0) deckCounts[i] = arr[i];
+                            if (deckCounts.Count > 0) usedSource = "PlayerDataManager.field.playerDeck";
+                        }
+                    }
+                }
+
+                // 1.c Try method: ONLY GetPlayerDeckCounts (strict)
+                if (deckCounts.Count == 0)
+                {
+                    var m = pd.GetType().GetMethod("GetPlayerDeckCounts");
+                    if (m != null)
+                    {
+                        var res = m.Invoke(pd, null) as System.Collections.IDictionary;
+                        if (res != null)
+                        {
+                            foreach (var k in res.Keys)
+                            {
+                                int id = Convert.ToInt32(k);
+                                int cnt = Convert.ToInt32(res[k]);
+                                if (cnt > 0) deckCounts[id] = cnt;
+                            }
+                            if (deckCounts.Count > 0) usedSource = "PlayerDataManager.method.GetPlayerDeckCounts";
+                        }
+                    }
                 }
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"ApplyCardArt Resources.Load 异常: {ex.Message}");
+                Debug.LogWarning($"[DeckManager] 从 PlayerDataManager 读取 deck 数据时异常: {ex.Message}");
             }
         }
 
-        if (loaded && sprite != null)
+        // 2) Fallback: parse playerDataCsv (only 'deck' lines)
+        if (deckCounts.Count == 0 && playerDataCsv != null)
         {
-            ApplySpriteToInstance(instance, sprite, cardId);
-        }
-        else
-        {
-            Debug.LogWarning($"ApplyCardArt: 未找到卡图 id={cardId}（Addressables & Resources 都未命中）");
-        }
-    }
-
-    void ApplySpriteToInstance(GameObject instance, Sprite sprite, int cardId)
-    {
-        if (instance == null || sprite == null) return;
-
-        string[] artNames = new[] {
-            "art", "artimage", "cardart", "artwork", "image_art", "spriteart",
-            "art_img", "artImage", "Art",
-            "卡图", "卡面", "卡牌图"
-        };
-
-        var images = instance.GetComponentsInChildren<UnityEngine.UI.Image>(true);
-        Image nameMatch = null;
-        Image numericSpriteMatch = null;
-        Image areaBest = null;
-
-        Regex digitsRe = new Regex(@"\d+");
-        float bestArea = -1f;
-
-        foreach (var img in images)
-        {
-            if (img == null) continue;
-            var nm = img.gameObject.name ?? "";
-
-            foreach (var k in artNames)
-            {
-                if (!string.IsNullOrEmpty(k) && nm.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    nameMatch = img;
-                    break;
-                }
-            }
-            if (nameMatch != null) break;
-
-            if (img.sprite != null)
-            {
-                var m = digitsRe.Match(img.sprite.name ?? "");
-                if (m.Success)
-                {
-                    if (int.TryParse(m.Value, out int sid) && sid == cardId)
-                    {
-                        numericSpriteMatch = img;
-                        break;
-                    }
-                    if (numericSpriteMatch == null) numericSpriteMatch = img;
-                }
-            }
-
-            var rt = img.rectTransform;
-            var area = Mathf.Abs(rt.rect.width * rt.rect.height);
-            if (area > bestArea)
-            {
-                bestArea = area;
-                areaBest = img;
-            }
+            deckCounts = ParsePlayerDataCsv(playerDataCsv.text);
+            if (deckCounts.Count > 0) usedSource = "playerDataCsv";
         }
 
-        Image target = nameMatch ?? numericSpriteMatch ?? areaBest;
+        // Debug: show what source and what we will instantiate
+        var sb = new StringBuilder();
+        sb.AppendFormat("[DeckManager] Deck source: {0}. Entries: ", usedSource);
+        foreach (var kv in deckCounts) sb.AppendFormat("{0}x{1} ", kv.Key, kv.Value);
+        Debug.Log(sb.ToString());
 
-        if (target != null)
+        if (deckCounts.Count == 0)
         {
-            target.sprite = sprite;
-            target.type = Image.Type.Simple;
-            target.preserveAspect = true;
-            Debug.Log($"ApplyCardArt: applied sprite id={cardId} to '{target.gameObject.name}' in instance '{instance.name}'");
+            Debug.LogWarning("[DeckManager] 未找到玩家卡组数据，Deck 为空");
             return;
         }
 
-        var raws = instance.GetComponentsInChildren<UnityEngine.UI.RawImage>(true);
-        UnityEngine.UI.RawImage rbest = null;
-        foreach (var ri in raws)
+        int created = 0;
+        // 逐张实例化：每张卡都生成一个 UI 实例（如果 cnt = 3，就生成 3 个）
+        foreach (var kv in deckCounts)
         {
-            if (ri == null) continue;
-            var nm = ri.gameObject.name ?? "";
-            foreach (var k in artNames)
+            int cardId = kv.Key;
+            int cnt = kv.Value;
+            if (cnt <= 0) continue;
+
+            CardMessage def = null;
+            if (_cardStore != null)
             {
-                if (!string.IsNullOrEmpty(k) && nm.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0)
+                try { def = _cardStore.GetCardById(cardId); }
+                catch { def = null; }
+            }
+
+            if (def == null)
+            {
+                Debug.LogWarning($"[DeckManager] 未在 CardStore 中找到 cardId={cardId}，跳过");
+                continue;
+            }
+
+            // 按数量逐个实例化（每次传 count=1）
+            for (int i = 0; i < cnt; i++)
+            {
+                if (TryInstantiateCard(def, 1, cardId)) created++;
+            }
+        }
+
+        Debug.Log($"[DeckManager] 已生成 Deck 项: {created}");
+    }
+
+    bool TryInstantiateCard(CardMessage def, int count, int cardId)
+    {
+        if (def == null) return false;
+
+        Transform parent = deckPanel;
+        GameObject wrapper = null;
+        if (deckEntryPrefab != null)
+        {
+            wrapper = Instantiate(deckEntryPrefab, deckPanel, false);
+            parent = wrapper.transform;
+        }
+
+        // Prefer OpenPackage.InstantiateCardItem
+        if (_openPackage != null)
+        {
+            try
+            {
+                var go = _openPackage.InstantiateCardItem(def, parent, count, false); // force attachInfo=false for deck
+                if (go != null)
                 {
-                    rbest = ri;
-                    break;
+                    PostProcessDeckInstance(go, cardId);
+                    return true;
                 }
             }
-            if (rbest != null) break;
-        }
-        if (rbest == null && raws.Length > 0) rbest = raws[0];
+            catch (MissingMethodException) { }
+            catch (Exception ex) { Debug.LogWarning($"[DeckManager] 调用 OpenPackage.InstantiateCardItem 出错: {ex.Message}"); }
 
-        if (rbest != null)
-        {
-            if (sprite.texture != null)
+            // reflection fallback
+            try
             {
-                rbest.texture = sprite.texture;
-                Debug.Log($"ApplyCardArt: applied raw texture id={cardId} to '{rbest.gameObject.name}'");
-            }
-            else
-            {
-                Debug.LogWarning($"ApplyCardArt: sprite.texture 为 null (id={cardId})");
-            }
-            return;
-        }
-
-        Debug.LogWarning($"ApplyCardArt: 未在实例中找到可设置的 Image/RawImage (id={cardId}, instance={instance.name})");
-    }
-
-    MonsterCard CloneMonsterCardForPlayer(MonsterCard def, int ownedCount)
-    {
-        var m = new MonsterCard(
-            id: def.Card_ID,
-            name: def.Card_Name,
-            description: def.Card_Description,
-            type: def.Card_Type,
-            atk: def.Card_Atk,
-            lv: def.Card_Lv,
-            attributes: def.Card_Attributes,
-            link: def.Card_Link,
-            linkEffect: def.Card_LinkEffect,
-            costs: def.Card_Costs,
-            monsterType: def.MonsterType
-        );
-        m.StackCount = ownedCount;
-        return m;
-    }
-
-    void ClearLibrary()
-    {
-        if (libraryPanel == null) return;
-        for (int i = libraryPanel.childCount - 1; i >= 0; i--)
-            Destroy(libraryPanel.GetChild(i).gameObject);
-    }
-
-    int TryParseInt(string s, int fallback)
-    {
-        if (int.TryParse((s ?? "").Trim(), out int v)) return v;
-        return fallback;
-    }
-
-    List<List<string>> ParseCsvRecords(string text)
-    {
-        var records = new List<List<string>>();
-        if (string.IsNullOrEmpty(text)) return records;
-        int i = 0, n = text.Length;
-        var field = new StringBuilder();
-        var row = new List<string>();
-        bool inQuotes = false;
-        while (i < n)
-        {
-            char c = text[i];
-            if (inQuotes)
-            {
-                if (c == '"')
+                var mi = _openPackage.GetType().GetMethod("InstantiateCardItem", BindingFlags.Public | BindingFlags.Instance);
+                if (mi != null)
                 {
-                    if (i + 1 < n && text[i + 1] == '"')
+                    var ps = mi.GetParameters();
+                    object[] args = BuildArgsForMethod(ps, def, parent, count, false);
+                    var res = mi.Invoke(_openPackage, args) as GameObject;
+                    if (res != null)
                     {
-                        field.Append('"');
-                        i += 2;
-                        continue;
-                    }
-                    else
-                    {
-                        inQuotes = false;
-                        i++;
-                        continue;
+                        PostProcessDeckInstance(res, cardId);
+                        return true;
                     }
                 }
-                else
+            }
+            catch (Exception ex) { Debug.LogWarning($"[DeckManager] 反射调用 OpenPackage.InstantiateCardItem 失败: {ex.Message}"); }
+        }
+
+        // CardStore proxy fallback
+        if (_cardStore != null)
+        {
+            try
+            {
+                MethodInfo mi = _cardStore.GetType().GetMethod("InstantiateCardItem", BindingFlags.Public | BindingFlags.Instance);
+                if (mi != null)
                 {
-                    field.Append(c);
-                    i++;
-                    continue;
+                    var ps = mi.GetParameters();
+                    object[] args = BuildArgsForMethod(ps, def, parent, count, false);
+                    var res = mi.Invoke(_cardStore, args) as GameObject;
+                    if (res != null)
+                    {
+                        PostProcessDeckInstance(res, cardId);
+                        return true;
+                    }
                 }
             }
-            else
+            catch (Exception ex) { Debug.LogWarning($"[DeckManager] 反射调用 CardStore.InstantiateCardItem 失败: {ex.Message}"); }
+        }
+
+        // last resort: try to instantiate a prefab from OpenPackage fields (best-effort)
+        try
+        {
+            var opType = _openPackage != null ? _openPackage.GetType() : null;
+            if (opType != null)
             {
-                if (c == '"')
+                var monsterField = opType.GetField("monsterPrefabs", BindingFlags.Public | BindingFlags.Instance);
+                var spellField = opType.GetField("spellPrefab", BindingFlags.Public | BindingFlags.Instance);
+                if (monsterField != null && def is MonsterCard)
                 {
-                    inQuotes = true;
-                    i++;
-                    continue;
+                    var listObj = monsterField.GetValue(_open_package_try_get()) as IList;
+                    GameObject prefab = null;
+                    if (listObj != null && listObj.Count > 0)
+                        prefab = listObj[Math.Abs(def.Card_ID) % listObj.Count] as GameObject;
+                    if (prefab != null)
+                    {
+                        var go = Instantiate(prefab, parent, false);
+                        PostProcessDeckInstance(go, cardId);
+                        return true;
+                    }
                 }
-                else if (c == ',')
+                else if (spellField != null && def is SpellCard)
                 {
-                    row.Add(field.ToString());
-                    field.Length = 0;
-                    i++;
-                    continue;
-                }
-                else if (c == '\r')
-                {
-                    i++;
-                    if (i < n && text[i] == '\n') i++;
-                    row.Add(field.ToString());
-                    field.Length = 0;
-                    records.Add(row);
-                    row = new List<string>();
-                    continue;
-                }
-                else if (c == '\n')
-                {
-                    i++;
-                    row.Add(field.ToString());
-                    field.Length = 0;
-                    records.Add(row);
-                    row = new List<string>();
-                    continue;
-                }
-                else
-                {
-                    field.Append(c);
-                    i++;
-                    continue;
+                    var prefab = spellField.GetValue(_open_package_try_get()) as GameObject;
+                    if (prefab != null)
+                    {
+                        var go = Instantiate(prefab, parent, false);
+                        PostProcessDeckInstance(go, cardId);
+                        return true;
+                    }
                 }
             }
         }
-        row.Add(field.ToString());
-        if (row.Count > 1 || (row.Count == 1 && !string.IsNullOrEmpty(row[0])))
-            records.Add(row);
-        return records;
+        catch { }
+
+        Debug.LogWarning("[DeckManager] 无法实例化卡片 UI：请确保场景中有 OpenPackage（或 CardStore 提供 InstantiateCardItem）");
+        return false;
+    }
+
+    // Helper to safely get _openPackage in last-resort prefab branch (keeps original behaviour)
+    private object _open_package_try_get()
+    {
+        return _openPackage;
+    }
+
+    // Hide / disable CardCounter (or other info UI) on deck instances
+    void PostProcessDeckInstance(GameObject go, int cardId)
+    {
+        if (go == null) return;
+
+        // If your LibraryManage has helper ClearPrefabArtPublic, call it to remove any leftover art placeholders
+        try { librarySource?.ClearPrefabArtPublic(go); } catch { }
+
+        if (hideCardInfoInDeck)
+        {
+            // Find CardCounter components and disable their GameObject to hide info
+            try
+            {
+                var counters = go.GetComponentsInChildren<CardCounter>(true);
+                foreach (var c in counters)
+                {
+                    if (c != null && c.gameObject != null)
+                        c.gameObject.SetActive(false);
+                }
+            }
+            catch { /* safe-fail */ }
+        }
+
+        // Pass correct cardId so art/info is set correctly
+        try
+        {
+            librarySource?.ApplyCardArtToInstance(go, cardId);
+        }
+        catch { }
+
+        // After ApplyCardArtToInstance (which might create CardCounter), ensure they are hidden
+        if (hideCardInfoInDeck)
+        {
+            try
+            {
+                var counters = go.GetComponentsInChildren<CardCounter>(true);
+                foreach (var c in counters)
+                {
+                    if (c != null && c.gameObject != null)
+                        c.gameObject.SetActive(false);
+                }
+            }
+            catch { }
+        }
+    }
+
+    object[] BuildArgsForMethod(ParameterInfo[] ps, CardMessage def, Transform parent, int count, bool attachInfo)
+    {
+        if (ps == null || ps.Length == 0) return new object[0];
+        var args = new object[ps.Length];
+        for (int i = 0; i < ps.Length; i++)
+        {
+            var pType = ps[i].ParameterType;
+            if (typeof(CardMessage).IsAssignableFrom(pType))
+                args[i] = def;
+            else if (typeof(Transform).IsAssignableFrom(pType))
+                args[i] = parent;
+            else if (pType == typeof(int))
+                args[i] = count;
+            else if (pType == typeof(bool))
+                args[i] = attachInfo;
+            else if (pType == typeof(object))
+                args[i] = def;
+            else if (pType == typeof(string))
+                args[i] = null;
+            else
+                args[i] = null;
+        }
+        return args;
+    }
+
+    Dictionary<int, int> ParsePlayerDataCsv(string text)
+    {
+        var dict = new Dictionary<int, int>();
+        if (string.IsNullOrEmpty(text)) return dict;
+        var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var raw in lines)
+        {
+            var line = raw.Trim();
+            if (string.IsNullOrEmpty(line) || line.StartsWith("#")) continue;
+            var parts = line.Split(',');
+            if (parts.Length < 3) continue;
+            var tag = parts[0].Trim().ToLower();
+            // STRICT: only accept 'deck' lines for deck manager
+            if (tag == "deck")
+            {
+                if (int.TryParse(parts[1].Trim(), out int id) && int.TryParse(parts[2].Trim(), out int cnt))
+                {
+                    if (cnt > 0)
+                    {
+                        if (dict.ContainsKey(id)) dict[id] += cnt; else dict[id] = cnt;
+                    }
+                }
+            }
+        }
+        return dict;
+    }
+
+    void ClearDeckPanel()
+    {
+        if (deckPanel == null) return;
+        for (int i = deckPanel.childCount - 1; i >= 0; i--)
+            Destroy(deckPanel.GetChild(i).gameObject);
     }
 }
