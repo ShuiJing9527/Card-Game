@@ -86,6 +86,7 @@ GameObject:
   - component: {fileID: 8116277019244758992}
   - component: {fileID: 2736673029001436793}
   - component: {fileID: 3906397504123318340}
+  - component: {fileID: 1343623462182065068}
   m_Layer: 5
   m_Name: "\u706B\u52FE\u7389\uFF08\u6697\uFF09"
   m_TagString: Untagged
@@ -151,3 +152,15 @@ MonoBehaviour:
   m_FillOrigin: 0
   m_UseSpriteMesh: 1
   m_PixelsPerUnitMultiplier: 1
+--- !u!114 &1343623462182065068
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5062790813891880213}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 440debafd755cb543ad88b5fc3ed491c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MagatamaMarker

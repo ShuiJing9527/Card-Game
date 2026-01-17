@@ -20,20 +20,16 @@ public class TooltipController : MonoBehaviour
     [Header("元素颜色（按顺序：土, 木, 水, 火, 金, Spell）")]
     public Color[] elementColors = new Color[6]
     {
-new Color(0.85f,0.7f,0.45f,1f), // 土
-new Color(0.45f,0.8f,0.5f,1f),  // 木
-new Color(0.45f,0.7f,0.95f,1f), // 水
-new Color(1f,0.55f,0.4f,1f),    // 火
-new Color(0.9f,0.85f,0.5f,1f),  // 金
-new Color(0.75f,0.55f,0.95f,1f) // 术/咒
+        new Color(0.85f,0.7f,0.45f,1f), // 土
+        new Color(0.45f,0.8f,0.5f,1f),  // 木
+        new Color(0.45f,0.7f,0.95f,1f), // 水
+        new Color(1f,0.55f,0.4f,1f),    // 火
+        new Color(0.9f,0.85f,0.5f,1f),  // 金
+        new Color(0.75f,0.55f,0.95f,1f) // 术/咒
     };
 
     [Tooltip("要被改色的 Image（例如 Tooltip 的背景或标识图标）。可留空（则不会改色）。")]
     public Image bondTextImage;
-
-    [Header("Canvas 排序")]
-    public bool forceTopSorting = true;
-    public int sortingOrder = 1000;
 
     [Header("稳定性/性能参数")]
     public float positionEpsilon = 3f;
@@ -53,7 +49,6 @@ new Color(0.75f,0.55f,0.95f,1f) // 术/咒
 
     Canvas parentCanvas;
     RectTransform canvasRect;
-    Canvas tooltipCanvas;
     CanvasGroup canvasGroup;
 
     private RectTransform lastTarget;
@@ -77,8 +72,7 @@ new Color(0.75f,0.55f,0.95f,1f) // 术/咒
         }
         Instance = this;
 
-        tooltipCanvas = GetComponentInParent<Canvas>();
-        parentCanvas = tooltipCanvas;
+        parentCanvas = GetComponentInParent<Canvas>();
         canvasRect = parentCanvas ? parentCanvas.GetComponent<RectTransform>() : null;
 
         if (autoBindIfMissing)
@@ -98,11 +92,8 @@ new Color(0.75f,0.55f,0.95f,1f) // 术/咒
             Debug.LogError("TooltipController: 请在 Inspector 绑定 rootRect 与 bodyField(TextMeshProUGUI)。");
         }
 
-        if (tooltipCanvas != null && forceTopSorting)
-        {
-            tooltipCanvas.overrideSorting = true;
-            tooltipCanvas.sortingOrder = sortingOrder;
-        }
+        // 不再由脚本设置 Canvas.overrideSorting/sortingOrder，
+        // 请通过 Inspector 为 tooltip 或其父 overlay Canvas 设置排序（若需要）。
 
         canvasGroup = GetComponent<CanvasGroup>();
         if (canvasGroup == null) canvasGroup = gameObject.AddComponent<CanvasGroup>();

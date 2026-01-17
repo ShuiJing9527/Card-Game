@@ -11,6 +11,7 @@ GameObject:
   - component: {fileID: 4503536229957864696}
   - component: {fileID: 3124786838875878430}
   - component: {fileID: 4183308005218687362}
+  - component: {fileID: 1922055500209936593}
   m_Layer: 5
   m_Name: "\u6728\u52FE\u7389\uFF08\u6697\uFF09"
   m_TagString: Untagged
@@ -76,6 +77,18 @@ MonoBehaviour:
   m_FillOrigin: 0
   m_UseSpriteMesh: 1
   m_PixelsPerUnitMultiplier: 1
+--- !u!114 &1922055500209936593
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 981988149485295408}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 440debafd755cb543ad88b5fc3ed491c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MagatamaMarker
 --- !u!1 &3877295654347639481
 GameObject:
   m_ObjectHideFlags: 0

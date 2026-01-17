@@ -275,7 +275,7 @@ MonoBehaviour:
   - {r: 0.6262168, g: 0.57087225, b: 0.7433963, a: 1}
   bondTextImage: {fileID: 2525800984600049010}
   forceTopSorting: 1
-  sortingOrder: 1000
+  sortingOrder: 500
   positionEpsilon: 2
   sizeEpsilon: 1
   minUpdateInterval: 0
