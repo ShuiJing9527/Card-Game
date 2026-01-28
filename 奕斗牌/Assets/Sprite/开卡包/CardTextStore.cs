@@ -5,7 +5,6 @@ using UnityEngine;
 
 /// <summary>
 /// 从 CSV(TextAsset) 加载卡牌文本（羁绊、效果、咒术描述、叠放说明文本）。
-/// 说明：
 /// - 默认显示应使用 StackDescription（文本），CSV 解析不会把叠放描述自动解析为数字写入 StackCount。
 /// - 保留 StackCount(int?) 字段仅作向后兼容（如果需要手动填充可在其他流程中写入）。
 /// - SetTexts 支持第6个可选参数 stackCount，以兼容旧调用，但 CSV 解析不会设置该值。

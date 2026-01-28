@@ -63,13 +63,13 @@ Material:
     m_Ints: []
     m_Floats:
     - _ManualTime: 0
-    - _Speed: 2
-    - __2: 0.5
-    - __3: 0
+    - _Speed: 2.5
+    - __2: 1.5
+    - __3: 1
     - __4: 2
     - __5: 1
     m_Colors:
-    - _Center: {r: 0.5, g: 0.5, b: 0, a: 0}
+    - _Center: {r: 1.5, g: 1.5, b: 0, a: 0}
     - _Color: {r: 0.9622642, g: 0.81730855, b: 0.48476326, a: 0}
   m_BuildTextureStacks: []
   m_AllowLocking: 1

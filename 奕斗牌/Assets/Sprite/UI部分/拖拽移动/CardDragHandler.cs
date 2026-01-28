@@ -1,67 +1,106 @@
+using System;
+using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
-using System.Collections;
-using System.Collections.Generic;
 
-/// <summary>
-/// 放置目标接口（改名为 ICardDropTarget 避免与项目中其他同名接口冲突）
-/// 在可放置的 UI 对象上实现此接口以接受卡牌并处理保存/更新逻辑
-/// </summary>
 public interface ICardDropTarget
 {
     bool CanAccept(CardDragHandler card);
     void Accept(CardDragHandler card, PointerEventData eventData);
 }
 
+public static class DragManager
+{
+    public static CardDragHandler CurrentDrag;
+}
+
+// 占位信息：记录来源、角色与创建者
+public class PlaceholderInfo : MonoBehaviour
+{
+    public string sourceName;
+    public string role; // "card" or "info"
+    public GameObject owner;
+}
+
 [RequireComponent(typeof(RectTransform))]
 public class CardDragHandler : MonoBehaviour, IPointerDownHandler, IBeginDragHandler, IDragHandler, IEndDragHandler
 {
     [Header("Overlay / 显示")]
-    public Transform overlayRoot;        // 若不指定，脚本会尝试查找名为 "Overlay" 的对象
-    public Canvas overlayCanvas;         // 可选，overlay 所属 Canvas（影响坐标转换与排序）
+    public Transform overlayRoot;
+    public Canvas overlayCanvas;
 
     [Header("拖拽行为")]
     public int overlaySortingOrder = 100;
 
     [Header("拖拽尺寸设置")]
-    public bool useAbsoluteDragSize = true;        // true=固定拖拽尺寸，false=按比例缩放
-    public Vector2 dragSize = new Vector2(240f, 240f); // 拖拽时的固定目标尺寸（默认240×240）
-    public float dragScaleMultiplier = 1.2f;       // 按比例缩放时的倍率
+    public bool useAbsoluteDragSize = true;
+    public Vector2 dragSize = new Vector2(240f, 240f);
+    public float dragScaleMultiplier = 1.2f;
 
-    [Header("卡片信息节点定位（可手动指定）")]
-    public Transform infoRoot;           // 优先使用（每张卡在 Inspector 指定它自己的 info 节点）
-    public string infoNodeName = "卡片信息"; // 若未指定 infoRoot，会按名字在子节点中查找
+    [Header("卡片数据")]
+    public int CardId = -1;
+    public bool IsStack = false;
+    public int StackCount = 0;
+
+    [Header("卡片信息节点定位")]
+    public Transform infoRoot;
+    public string infoNodeName = "卡片信息";
+
+    // 公开兼容字段/方法（为外部 DropForwarder / DeckManager 提供接口）
+    // 标记该实例是否为“预览”（外部放下后可能需要销毁）
+    public bool isPreview = false;
+
+    // 如果外部需要保存/还原父级，也提供访问方法
+    public void SaveOriginalParent()
+    {
+        originalParent = transform.parent;
+        originalSiblingIndex = transform.GetSiblingIndex();
+    }
+
+    public void RestoreToOriginalParentIfNeeded()
+    {
+        if (originalParent != null && transform.parent != originalParent)
+        {
+            transform.SetParent(originalParent, false);
+            transform.SetSiblingIndex(Mathf.Clamp(originalSiblingIndex, 0, originalParent.childCount));
+        }
+    }
 
     // 基本字段
     private RectTransform rectTransform;
     private CanvasGroup canvasGroup;
-    private Vector2 originalSizeDelta;   // 记录原始卡片尺寸，用于结束拖拽后恢复
-    private Vector3 originalLocalScale;  // 记录原始卡片缩放，用于结束拖拽后恢复
+    private Vector2 originalSizeDelta;
+    private Vector3 originalLocalScale;
     private bool originalSizeSaved = false;
 
     private Transform originalParent;
     private int originalSiblingIndex;
-    private GameObject placeholder;  // 卡片位置占位
+
+    // card 占位
+    private GameObject _placeholder;
+    private bool placeholderOwned = false;
+
+    // info 占位
+    private GameObject infoPlaceholder;
+    private bool infoPlaceholderOwned = false;
 
     private bool isDragging = false;
 
-    // Overlay Canvas 排序恢复用
+    // overlay 排序备份
     private bool originalCanvasOverrideSorting;
     private int originalCanvasSortingOrder;
 
-    // info 剥离/恢复相关
+    // info 剥离/恢复
     private Transform originalInfoTransform = null;
     private Transform originalInfoPrevParent = null;
     private int originalInfoPrevSibling = -1;
-    private GameObject infoPlaceholder = null;
 
-    // RectTransform 情况
     private RectTransform originalInfoRect = null;
     private RectTransformValues originalInfoRectValues = null;
     private bool originalInfoHadRect = false;
 
-    // 非 UI（没有 RectTransform）备份
     private Vector3 originalInfoLocalPosition;
     private Quaternion originalInfoLocalRotation;
     private Vector3 originalInfoLocalScale;
@@ -76,11 +115,81 @@ public class CardDragHandler : MonoBehaviour, IPointerDownHandler, IBeginDragHan
         public Vector3 localScale;
     }
 
+    // clone 拖拽（用于 IsStack）
+    private GameObject dragCloneVisual;
+    private RectTransform dragCloneRect;
+    private bool hasValidClone = false;
+
+    private bool savedBlocksRaycasts = true;
+
+    // ----- 新增字段：提升拖拽目标 Canvas 的支持 -----
+    private Canvas tempDragCanvas;                    // the Canvas component currently used for elevating this dragged object
+    private bool tempDragCanvasCreated = false;       // whether we created it ourselves
+    private bool tempDragCanvasOriginalOverride;
+    private int tempDragCanvasOriginalOrder;
+    private RenderMode tempDragCanvasOriginalRenderMode;
+    private Camera tempDragCanvasOriginalCamera;
+
+    // 若 clone 也需要提升（用于 IsStack），记录它的临时 Canvas（若创建）
+    private Canvas tempCloneCanvas;
+    private bool tempCloneCanvasCreated = false;
+
     private void Awake()
     {
         rectTransform = GetComponent<RectTransform>();
         canvasGroup = GetComponent<CanvasGroup>();
         if (canvasGroup == null) canvasGroup = gameObject.AddComponent<CanvasGroup>();
+    }
+
+    private void OnDisable()
+    {
+        ClearSelfPlaceholders();
+        isDragging = false;
+        if (DragManager.CurrentDrag == this) DragManager.CurrentDrag = null;
+
+        // 确保临时 Canvas 被恢复 / 清理，防止在禁用时残留
+        RestoreDragCanvasForThis();
+        RestoreCloneCanvasIfAny();
+    }
+
+    private void OnDestroy()
+    {
+        ClearSelfPlaceholders();
+        if (dragCloneVisual != null)
+        {
+            Destroy(dragCloneVisual);
+            dragCloneVisual = null;
+        }
+        isDragging = false;
+        if (DragManager.CurrentDrag == this) DragManager.CurrentDrag = null;
+
+        RestoreDragCanvasForThis();
+        RestoreCloneCanvasIfAny();
+    }
+
+    private void ClearSelfPlaceholders()
+    {
+        if (_placeholder != null)
+        {
+            var pi = _placeholder.GetComponent<PlaceholderInfo>();
+            if (pi != null && pi.owner == this.gameObject)
+            {
+                Destroy(_placeholder);
+            }
+            _placeholder = null;
+            placeholderOwned = false;
+        }
+
+        if (infoPlaceholder != null)
+        {
+            var pi = infoPlaceholder.GetComponent<PlaceholderInfo>();
+            if (pi != null && pi.owner == this.gameObject)
+            {
+                Destroy(infoPlaceholder);
+            }
+            infoPlaceholder = null;
+            infoPlaceholderOwned = false;
+        }
     }
 
     public void OnPointerDown(PointerEventData eventData) { }
@@ -89,7 +198,6 @@ public class CardDragHandler : MonoBehaviour, IPointerDownHandler, IBeginDragHan
     {
         if (isDragging) return;
 
-        // 自动查找 overlayRoot（若未指定）
         if (overlayRoot == null)
         {
             GameObject found = GameObject.Find("Overlay");
@@ -100,14 +208,55 @@ public class CardDragHandler : MonoBehaviour, IPointerDownHandler, IBeginDragHan
             overlayCanvas = overlayRoot.GetComponentInParent<Canvas>();
         }
 
-        // 记录卡片原始父物体与索引
-        originalParent = transform.parent;
-        originalSiblingIndex = transform.GetSiblingIndex();
+        // 保存原父（兼容外部 SaveOriginalParent 调用）
+        SaveOriginalParent();
 
-        // 创建卡片占位，避免原容器布局坍塌
-        placeholder = CreatePlaceholder(rectTransform, originalParent, originalSiblingIndex);
+        if (IsStack)
+        {
+            dragCloneVisual = CreateDragClone();
+            if (dragCloneVisual != null) hasValidClone = true;
 
-        // ---- 查找并临时剥离卡片信息 ----
+            // 若本组件此前创建了占位，则销毁（堆叠不移动原始 UI）
+            if (_placeholder != null)
+            {
+                var pi = _placeholder.GetComponent<PlaceholderInfo>();
+                if (pi != null && pi.owner == this.gameObject) Destroy(_placeholder);
+                _placeholder = null;
+                placeholderOwned = false;
+            }
+        }
+        else
+        {
+            bool createdCard;
+            _placeholder = CreatePlaceholder(rectTransform, originalParent, originalSiblingIndex, out createdCard, "card");
+            placeholderOwned = createdCard;
+
+            if (overlayRoot != null)
+            {
+                transform.SetParent(overlayRoot, true);
+
+                if (overlayCanvas != null)
+                {
+                    originalCanvasOverrideSorting = overlayCanvas.overrideSorting;
+                    originalCanvasSortingOrder = overlayCanvas.sortingOrder;
+                    overlayCanvas.overrideSorting = true;
+                    overlayCanvas.sortingOrder = overlaySortingOrder;
+                }
+            }
+
+            if (!originalSizeSaved && rectTransform != null)
+            {
+                originalSizeDelta = rectTransform.sizeDelta;
+                originalLocalScale = rectTransform.localScale;
+                originalSizeSaved = true;
+            }
+            ApplyDragSizeOrScale();
+        }
+
+        // 在将对象移动到 overlayRoot 后，提升该对象的 Canvas 排序到最高（仅影响此卡片，不移动 info）。
+        ElevateDragCanvasForThis();
+
+        // 查找并剥离 info
         originalInfoTransform = null;
         if (infoRoot != null)
         {
@@ -115,45 +264,68 @@ public class CardDragHandler : MonoBehaviour, IPointerDownHandler, IBeginDragHan
         }
         else
         {
-            // 按名字查找子节点（精确匹配）
             foreach (Transform t in transform.GetComponentsInChildren<Transform>(true))
             {
                 if (t == this.transform) continue;
-                if (t.name == infoNodeName)
-                {
-                    originalInfoTransform = t;
-                    break;
-                }
+                if (t.name == infoNodeName) { originalInfoTransform = t; break; }
             }
-
-            // 如果仍未找到，可尝试更宽松的匹配（含 "信息" 或 "info"）
             if (originalInfoTransform == null)
             {
                 foreach (Transform t in transform.GetComponentsInChildren<Transform>(true))
                 {
                     if (t == this.transform) continue;
                     string nm = t.name.ToLower();
-                    if (nm.Contains("信息") || nm.Contains("info"))
-                    {
-                        originalInfoTransform = t;
-                        break;
-                    }
+                    if (nm.Contains("信息") || nm.Contains("info")) { originalInfoTransform = t; break; }
                 }
             }
         }
 
-        // 仅当 info 存在且当前为激活态（可见）时才进行剥离；若 info 隐藏则不动
         if (originalInfoTransform != null && originalInfoTransform.gameObject.activeInHierarchy)
         {
-            originalInfoPrevParent = originalInfoTransform.parent;
-            originalInfoPrevSibling = originalInfoTransform.GetSiblingIndex();
+            Transform infoOrigParent = originalInfoTransform.parent;
+            int infoOrigSibling = originalInfoTransform.GetSiblingIndex();
 
-            // 在原父位置创建 info 的占位以维持父级布局
-            RectTransform infoSourceRect = originalInfoTransform.GetComponent<RectTransform>();
-            infoPlaceholder = CreatePlaceholder(infoSourceRect != null ? infoSourceRect : originalInfoTransform as RectTransform,
-                                                 originalInfoPrevParent, originalInfoPrevSibling);
+            originalInfoPrevParent = infoOrigParent;
+            originalInfoPrevSibling = infoOrigSibling;
 
-            // 记录 transform/rect 数据以便恢复
+            // 关键：若 info 的目标父与 card 的原父相同，则不单独创建 info 占位（避免重复）
+            bool sameParentAsCard = (originalInfoPrevParent == originalParent && originalParent != null);
+            if (sameParentAsCard)
+            {
+                // reuse card placeholder instead of creating a second one
+                infoPlaceholder = _placeholder;
+                infoPlaceholderOwned = false; // 不归 info 单独销毁
+                Debug.Log($"[CardDrag] Info 位于与 card 相同父级，复用 card 占位，跳过创建 info 占位");
+            }
+            else
+            {
+                // 仅在目标父不是 overlay 时才创建 info 占位
+                bool needInfoPh = originalInfoPrevParent != null;
+                if (needInfoPh)
+                {
+                    if ((overlayRoot != null && originalInfoPrevParent == overlayRoot) ||
+                        (overlayCanvas != null && originalInfoPrevParent == overlayCanvas.transform))
+                    {
+                        needInfoPh = false;
+                    }
+                }
+
+                if (needInfoPh)
+                {
+                    bool createdInfo;
+                    RectTransform infoSourceRect = originalInfoTransform.GetComponent<RectTransform>();
+                    infoPlaceholder = CreatePlaceholder(infoSourceRect != null ? infoSourceRect : originalInfoTransform as RectTransform,
+                                                        originalInfoPrevParent, originalInfoPrevSibling, out createdInfo, "info");
+                    infoPlaceholderOwned = createdInfo;
+                }
+                else
+                {
+                    infoPlaceholder = null;
+                    infoPlaceholderOwned = false;
+                }
+            }
+
+            // 保存 info 状态
             originalInfoRect = originalInfoTransform.GetComponent<RectTransform>();
             if (originalInfoRect != null)
             {
@@ -176,56 +348,131 @@ public class CardDragHandler : MonoBehaviour, IPointerDownHandler, IBeginDragHan
                 originalInfoLocalScale = originalInfoTransform.localScale;
             }
 
-            // 将 info 移到稳定的 overlay 父级（若没有 overlay，则移到原父，不会发生移动）
             Transform stableParent = (overlayCanvas != null) ? overlayCanvas.transform :
                                      (overlayRoot != null) ? overlayRoot : originalInfoPrevParent;
 
             if (stableParent != null)
             {
-                // 使用 worldPositionStays = true 保持视觉位置不变
                 originalInfoTransform.SetParent(stableParent, true);
             }
 
-            Debug.Log($"[CardDrag] Info '{originalInfoTransform.name}' 临时剥离到 '{(stableParent != null ? stableParent.name : "(null)")}'");
-        }
-        // ----------------------------------
-
-        // 把卡片移到 overlayRoot（如果有），保留世界坐标
-        if (overlayRoot != null)
-        {
-            transform.SetParent(overlayRoot, true);
-
-            if (overlayCanvas != null)
-            {
-                originalCanvasOverrideSorting = overlayCanvas.overrideSorting;
-                originalCanvasSortingOrder = overlayCanvas.sortingOrder;
-                overlayCanvas.overrideSorting = true;
-                overlayCanvas.sortingOrder = overlaySortingOrder;
-            }
+            Debug.Log($"[CardDrag] Info '{originalInfoTransform.name}' 临时剥离到 '{(stableParent != null ? stableParent.name : "(null)")}', infoPlaceholder={(infoPlaceholder != null ? infoPlaceholder.name : "(null)")} owned={infoPlaceholderOwned}");
         }
 
-        // 保存原始卡片尺寸/缩放，应用拖拽尺寸
-        if (!originalSizeSaved && rectTransform != null)
-        {
-            originalSizeDelta = rectTransform.sizeDelta;
-            originalLocalScale = rectTransform.localScale;
-            originalSizeSaved = true;
-        }
-        ApplyDragSizeOrScale();
-
-        // 禁用卡牌的 blocksRaycasts，以便下面的 UI 接收事件
         savedBlocksRaycasts = canvasGroup.blocksRaycasts;
         canvasGroup.blocksRaycasts = false;
 
         isDragging = true;
+
+        if (CardId == -1)
+        {
+            var match = Regex.Match(gameObject.name, @"\d{4,}");
+            if (match.Success && int.TryParse(match.Value, out int parsedId)) CardId = parsedId;
+        }
+
+        DragManager.CurrentDrag = this;
+        Debug.Log($"[CardDrag] BeginDrag CardId={CardId} IsStack={IsStack} path={GetFullPath(transform)} placeholderOwned={placeholderOwned}");
     }
 
-    // 保存上一次 canvasGroup.blocksRaycasts 的状态
-    private bool savedBlocksRaycasts = true;
+    private GameObject CreateDragClone()
+    {
+        if (rectTransform == null) return null;
 
-    /// <summary>
-    /// 应用拖拽时的尺寸或缩放
-    /// </summary>
+        GameObject clone = new GameObject("CardDragClone_" + CardId);
+        clone.layer = gameObject.layer;
+
+        RectTransform cloneRT = clone.AddComponent<RectTransform>();
+        cloneRT.anchorMin = Vector2.one * 0.5f;
+        cloneRT.anchorMax = Vector2.one * 0.5f;
+        cloneRT.pivot = Vector2.one * 0.5f;
+
+        if (useAbsoluteDragSize)
+        {
+            float scaleFactor = overlayCanvas != null ? overlayCanvas.scaleFactor : 1f;
+            cloneRT.sizeDelta = dragSize / scaleFactor;
+        }
+        else
+        {
+            cloneRT.sizeDelta = rectTransform != null ? rectTransform.sizeDelta : new Vector2(100, 150);
+        }
+
+        Image sourceArt = null;
+        foreach (var img in GetComponentsInChildren<Image>(true))
+        {
+            string nm = img.gameObject.name.ToLower();
+            if (nm.Contains("art") || nm.Contains("thumb") || nm.Contains("card")) { sourceArt = img; break; }
+            if (sourceArt == null) sourceArt = img;
+        }
+        if (sourceArt != null)
+        {
+            GameObject artGO = new GameObject("Art");
+            artGO.layer = clone.layer;
+            var artRT = artGO.AddComponent<RectTransform>();
+            artRT.SetParent(cloneRT, false);
+            var artImg = artGO.AddComponent<Image>();
+            artImg.sprite = sourceArt.sprite;
+            artImg.color = sourceArt.color;
+            artImg.preserveAspect = sourceArt.preserveAspect;
+            artRT.anchorMin = new Vector2(0, 0);
+            artRT.anchorMax = new Vector2(1, 1);
+            artRT.pivot = new Vector2(0.5f, 0.5f);
+            artRT.anchoredPosition = Vector2.zero;
+            artRT.sizeDelta = cloneRT.sizeDelta;
+        }
+
+        Text countText = null;
+        foreach (var t in GetComponentsInChildren<Text>(true))
+        {
+            string nm = t.gameObject.name.ToLower();
+            if (nm.Contains("count") || nm.Contains("stack")) { countText = t; break; }
+        }
+        if (countText != null)
+        {
+            GameObject ct = new GameObject("Count");
+            ct.layer = clone.layer;
+            var ctRT = ct.AddComponent<RectTransform>();
+            ctRT.SetParent(cloneRT, false);
+            var txt = ct.AddComponent<Text>();
+            txt.text = countText.text;
+            txt.font = countText.font;
+            txt.fontSize = countText.fontSize;
+            txt.color = countText.color;
+            txt.alignment = countText.alignment;
+            ctRT.anchorMin = new Vector2(1, 1);
+            ctRT.anchorMax = new Vector2(1, 1);
+            ctRT.pivot = new Vector2(1, 1);
+            ctRT.anchoredPosition = new Vector2(-10, -10);
+            ctRT.sizeDelta = new Vector2(60, 30);
+        }
+
+        if (overlayRoot != null) clone.transform.SetParent(overlayRoot, false);
+        else if (overlayCanvas != null) clone.transform.SetParent(overlayCanvas.transform, false);
+        else clone.transform.SetParent(transform.parent, false);
+
+        CanvasGroup cg = clone.AddComponent<CanvasGroup>();
+        cg.blocksRaycasts = false;
+        cg.interactable = false;
+
+        if (overlayCanvas != null)
+        {
+            Vector2 mousePos;
+            RectTransform canvasRT = overlayCanvas.transform as RectTransform;
+            RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRT,
+                                                                   Input.mousePosition,
+                                                                   overlayCanvas.worldCamera,
+                                                                   out mousePos);
+            cloneRT.anchoredPosition = mousePos;
+        }
+        else clone.transform.position = Input.mousePosition;
+
+        dragCloneRect = cloneRT;
+
+        // 确保 clone 也在最上层可见（如果需要）
+        ElevateCloneCanvas(clone);
+
+        return clone;
+    }
+
     private void ApplyDragSizeOrScale()
     {
         if (rectTransform == null) return;
@@ -237,36 +484,43 @@ public class CardDragHandler : MonoBehaviour, IPointerDownHandler, IBeginDragHan
             rectTransform.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, targetSize.x);
             rectTransform.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, targetSize.y);
         }
-        else
-        {
-            rectTransform.localScale = originalLocalScale * dragScaleMultiplier;
-        }
+        else rectTransform.localScale = originalLocalScale * dragScaleMultiplier;
     }
 
     public void OnDrag(PointerEventData eventData)
     {
         if (!isDragging) return;
 
-        if (overlayCanvas != null)
+        if (IsStack && hasValidClone && dragCloneRect != null)
         {
-            RectTransform canvasRect = overlayCanvas.transform as RectTransform;
-            Vector2 localPoint;
-            if (RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, eventData.position, eventData.pressEventCamera, out localPoint))
+            if (overlayCanvas != null)
             {
-                rectTransform.localPosition = localPoint;
+                RectTransform canvasRect = overlayCanvas.transform as RectTransform;
+                Vector2 localPoint;
+                if (RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, eventData.position, eventData.pressEventCamera, out localPoint))
+                    dragCloneRect.anchoredPosition = localPoint;
+            }
+            else
+            {
+                if (eventData.pressEventCamera != null)
+                    RectTransformUtility.ScreenPointToWorldPointInRectangle(dragCloneRect, eventData.position, eventData.pressEventCamera, out Vector3 worldPos);
+                else dragCloneRect.position = eventData.position;
             }
         }
         else
         {
-            Vector3 worldPos;
-            if (eventData.pressEventCamera != null)
+            if (overlayCanvas != null)
             {
-                RectTransformUtility.ScreenPointToWorldPointInRectangle(rectTransform, eventData.position, eventData.pressEventCamera, out worldPos);
-                rectTransform.position = worldPos;
+                RectTransform canvasRect = overlayCanvas.transform as RectTransform;
+                Vector2 localPoint;
+                if (RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, eventData.position, eventData.pressEventCamera, out localPoint))
+                    rectTransform.localPosition = localPoint;
             }
             else
             {
-                rectTransform.position = eventData.position;
+                if (eventData.pressEventCamera != null)
+                    RectTransformUtility.ScreenPointToWorldPointInRectangle(rectTransform, eventData.position, eventData.pressEventCamera, out Vector3 worldPos);
+                else rectTransform.position = eventData.position;
             }
         }
     }
@@ -276,59 +530,66 @@ public class CardDragHandler : MonoBehaviour, IPointerDownHandler, IBeginDragHan
         if (!isDragging) return;
         isDragging = false;
 
-        // 射线检测查找可放置目标（跳过占位）
-        List<RaycastResult> raycastResults = new List<RaycastResult>();
-        EventSystem.current.RaycastAll(eventData, raycastResults);
+        if (DragManager.CurrentDrag == this) DragManager.CurrentDrag = null;
 
         ICardDropTarget targetSlot = null;
+        List<RaycastResult> raycastResults = new List<RaycastResult>();
+        if (EventSystem.current != null)
+            EventSystem.current.RaycastAll(eventData, raycastResults);
+
         foreach (var result in raycastResults)
         {
-            if (result.gameObject == null || result.gameObject == placeholder)
-                continue;
+            if (result.gameObject == null) continue;
+            if (_placeholder != null && result.gameObject == _placeholder) continue;
 
             targetSlot = result.gameObject.GetComponentInParent<ICardDropTarget>();
-            if (targetSlot != null && targetSlot.CanAccept(this))
+            if (targetSlot != null)
             {
-                break;
+                if (targetSlot.CanAccept(this)) break;
+                else targetSlot = null;
             }
         }
 
         if (targetSlot != null)
         {
-            targetSlot.Accept(this, eventData);
+            try { targetSlot.Accept(this, eventData); }
+            catch (Exception ex) { Debug.LogWarning($"[CardDrag] target.Accept 异常: {ex.Message}\n{ex.StackTrace}"); RestoreToOriginalPosition(); }
+        }
+        else RestoreToOriginalPosition();
+
+        if (IsStack)
+        {
+            if (dragCloneVisual != null) { Destroy(dragCloneVisual); dragCloneVisual = null; }
+            hasValidClone = false;
         }
         else
         {
-            RestoreToOriginalPosition();
+            if (originalSizeSaved && rectTransform != null)
+            {
+                if (useAbsoluteDragSize)
+                {
+                    rectTransform.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, originalSizeDelta.x);
+                    rectTransform.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, originalSizeDelta.y);
+                }
+                else rectTransform.localScale = originalLocalScale;
+            }
+
+            if (overlayCanvas != null)
+            {
+                overlayCanvas.overrideSorting = originalCanvasOverrideSorting;
+                overlayCanvas.sortingOrder = originalCanvasSortingOrder;
+            }
         }
 
-        // 恢复卡片原始尺寸/缩放
-        if (originalSizeSaved && rectTransform != null)
-        {
-            if (useAbsoluteDragSize)
-            {
-                rectTransform.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, originalSizeDelta.x);
-                rectTransform.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, originalSizeDelta.y);
-            }
-            else
-            {
-                rectTransform.localScale = originalLocalScale;
-            }
-        }
-
-        // 恢复 info（如果曾经剥离）
+        // 恢复被剥离的 info
         if (originalInfoTransform != null)
         {
             if (originalInfoPrevParent != null)
             {
-                // 把 info 放回原父（worldPositionStays = false），以便适配父级 Layout
                 originalInfoTransform.SetParent(originalInfoPrevParent, false);
-
-                // 恢复 sibling
                 int idx = Mathf.Clamp(originalInfoPrevSibling, 0, originalInfoPrevParent.childCount);
                 originalInfoTransform.SetSiblingIndex(idx);
 
-                // 恢复 RectTransform 或普通 transform 数据
                 if (originalInfoHadRect && originalInfoRect != null && originalInfoRectValues != null)
                 {
                     originalInfoRect.pivot = originalInfoRectValues.pivot;
@@ -345,65 +606,111 @@ public class CardDragHandler : MonoBehaviour, IPointerDownHandler, IBeginDragHan
                     originalInfoTransform.localScale = originalInfoLocalScale;
                 }
 
-                // 销毁 info 占位
+                // 销毁仅由本组件创建的 info 占位（若 infoPlaceholder == _placeholder 则 infoPlaceholderOwned==false，不会销毁）
                 if (infoPlaceholder != null)
                 {
-                    Destroy(infoPlaceholder);
-                    infoPlaceholder = null;
+                    var pi = infoPlaceholder.GetComponent<PlaceholderInfo>();
+                    if (pi != null && pi.owner == this.gameObject && infoPlaceholderOwned)
+                        Destroy(infoPlaceholder);
                 }
+                infoPlaceholder = null;
+                infoPlaceholderOwned = false;
 
-                // 强制刷新父级 Layout（兼容 LayoutGroup/ContentSizeFitter）
                 Canvas.ForceUpdateCanvases();
                 var parentRT = originalInfoPrevParent as RectTransform;
-                if (parentRT != null)
-                {
-                    UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(parentRT);
-                }
+                if (parentRT != null) LayoutRebuilder.ForceRebuildLayoutImmediate(parentRT);
 
-                Debug.Log($"[CardDrag] 已恢复 info '{originalInfoTransform.name}' 到 {GetFullPath(originalInfoPrevParent)} idx={idx}");
+                Debug.Log($"[CardDrag] 恢复 info '{originalInfoTransform.name}' 到 {GetFullPath(originalInfoPrevParent)} idx={idx}");
             }
             else
             {
-                Debug.LogWarning("[CardDrag] originalInfoPrevParent 为 null，无法恢复 info 的父级，信息仍然留在 overlay。");
+                Debug.LogWarning("[CardDrag] originalInfoPrevParent 为 null，info 未能恢复父级。");
             }
         }
 
-        // 清理 info 上下文
-        ClearInfoRestoreContext();
-
-        // 恢复卡片自己的射线状态
+        // 恢复射线并销毁 card 占位（若本组件创建且归属）
         canvasGroup.blocksRaycasts = savedBlocksRaycasts;
 
-        // 销毁卡片占位
-        if (placeholder != null)
+        if (_placeholder != null)
         {
-            Destroy(placeholder);
-            placeholder = null;
+            var pi = _placeholder.GetComponent<PlaceholderInfo>();
+            if (pi != null && pi.owner == this.gameObject && placeholderOwned)
+                Destroy(_placeholder);
         }
+        _placeholder = null;
+        placeholderOwned = false;
 
-        // 恢复 overlayCanvas 排序设置
-        if (overlayCanvas != null)
+        // 恢复并清理我们临时提升的 Canvas（卡片与 clone）
+        RestoreDragCanvasForThis();
+        RestoreCloneCanvasIfAny();
+
+        ClearInfoRestoreContext();
+
+        if (originalParent != null)
         {
-            overlayCanvas.overrideSorting = originalCanvasOverrideSorting;
-            overlayCanvas.sortingOrder = originalCanvasSortingOrder;
+            var rpRT = originalParent as RectTransform;
+            if (rpRT != null) LayoutRebuilder.ForceRebuildLayoutImmediate(rpRT);
         }
     }
 
     private void RestoreToOriginalPosition()
     {
-        if (originalParent == null) return;
-        transform.SetParent(originalParent, false);
-        transform.SetSiblingIndex(Mathf.Clamp(originalSiblingIndex, 0, originalParent.childCount));
+        if (IsStack) { /* 不移动原始 UI */ }
+        else
+        {
+            if (originalParent == null) return;
+            transform.SetParent(originalParent, false);
+            transform.SetSiblingIndex(Mathf.Clamp(originalSiblingIndex, 0, originalParent.childCount));
+        }
     }
 
-    // 创建占位（用于卡与 info 两种占位）
-    private GameObject CreatePlaceholder(RectTransform sourceRect, Transform parent, int siblingIndex)
+    // CreatePlaceholder: 名称包含 role，优先复用 PlaceholderInfo；否则按名字；都没有再创建
+    private GameObject CreatePlaceholder(RectTransform sourceRect, Transform parent, int siblingIndex, out bool createdNew, string role = "card")
     {
+        createdNew = false;
         if (parent == null) return null;
 
-        GameObject ph = new GameObject((sourceRect != null ? sourceRect.name : "placeholder") + "_ph", typeof(RectTransform));
-        RectTransform rt = ph.GetComponent<RectTransform>();
-        rt.SetParent(parent, false);
+        string sourceName = sourceRect != null ? sourceRect.name : "placeholder";
+        string phName = $"{sourceName}_{role}_ph";
+
+        Debug.Log($"CreatePlaceholder called by '{gameObject.name}' role={role} phName={phName} parent={(parent != null ? parent.name : "(null)")}\nStack:\n{Environment.StackTrace}");
+
+        // 1) 按 PlaceholderInfo 复用
+        for (int i = 0; i < parent.childCount; i++)
+        {
+            var c = parent.GetChild(i);
+            var info = c.GetComponent<PlaceholderInfo>();
+            if (info != null && info.sourceName == sourceName && info.role == role)
+            {
+                Debug.Log($"CreatePlaceholder: reuse existing (by PlaceholderInfo) '{c.name}' in '{parent.name}' owner={(info.owner != null ? info.owner.name : "(null)")}");
+                createdNew = false;
+                return c.gameObject;
+            }
+        }
+
+        // 2) 再按名字查找
+        Transform existingByName = parent.Find(phName);
+        if (existingByName != null)
+        {
+            var info = existingByName.GetComponent<PlaceholderInfo>();
+            if (info == null)
+            {
+                info = existingByName.gameObject.AddComponent<PlaceholderInfo>();
+                info.sourceName = sourceName;
+                info.role = role;
+                info.owner = this.gameObject;
+                Debug.Log($"CreatePlaceholder: found existing by name '{phName}' and attached PlaceholderInfo(owner={gameObject.name})");
+            }
+            else Debug.Log($"CreatePlaceholder: found existing by name '{phName}' with PlaceholderInfo(owner={(info.owner != null ? info.owner.name : "(null)")})");
+
+            createdNew = false;
+            return existingByName.gameObject;
+        }
+
+        // 3) 创建新占位
+        GameObject ph = new GameObject(phName, typeof(RectTransform));
+        ph.transform.SetParent(parent, false);
+        var rt = ph.GetComponent<RectTransform>();
         rt.SetSiblingIndex(Mathf.Clamp(siblingIndex, 0, parent.childCount));
 
         if (sourceRect != null)
@@ -415,17 +722,20 @@ public class CardDragHandler : MonoBehaviour, IPointerDownHandler, IBeginDragHan
             rt.pivot = sourceRect.pivot;
             rt.localScale = sourceRect.localScale;
         }
-        else
-        {
-            // 若没有源 RectTransform，给一个小默认尺寸，避免某些 Layout 认为没有子项
-            rt.sizeDelta = new Vector2(1, 1);
-        }
+        else rt.sizeDelta = new Vector2(1, 1);
 
         var cg = ph.AddComponent<CanvasGroup>();
         cg.alpha = 0f;
         cg.blocksRaycasts = false;
         cg.interactable = false;
 
+        var phInfo = ph.AddComponent<PlaceholderInfo>();
+        phInfo.sourceName = sourceName;
+        phInfo.role = role;
+        phInfo.owner = this.gameObject;
+
+        createdNew = true;
+        Debug.Log($"CreatePlaceholder: created new '{phName}' in '{parent.name}' owner={gameObject.name}");
         return ph;
     }
 
@@ -440,11 +750,14 @@ public class CardDragHandler : MonoBehaviour, IPointerDownHandler, IBeginDragHan
         originalInfoLocalPosition = Vector3.zero;
         originalInfoLocalRotation = Quaternion.identity;
         originalInfoLocalScale = Vector3.one;
+
         if (infoPlaceholder != null)
         {
-            Destroy(infoPlaceholder);
-            infoPlaceholder = null;
+            var pi = infoPlaceholder.GetComponent<PlaceholderInfo>();
+            if (pi != null && pi.owner == this.gameObject && infoPlaceholderOwned) Destroy(infoPlaceholder);
         }
+        infoPlaceholder = null;
+        infoPlaceholderOwned = false;
     }
 
     private string GetFullPath(Transform t)
@@ -460,14 +773,176 @@ public class CardDragHandler : MonoBehaviour, IPointerDownHandler, IBeginDragHan
         return path;
     }
 
-    // 外部调用：把卡片放入某个父物体（供 ICardDropTarget 调用）
     public void PlaceInto(Transform targetParent, int siblingIndex = -1)
     {
         if (targetParent == null) return;
         transform.SetParent(targetParent, false);
-        if (siblingIndex >= 0)
-            transform.SetSiblingIndex(Mathf.Clamp(siblingIndex, 0, targetParent.childCount));
-        else
-            transform.SetAsLastSibling();
+        if (siblingIndex >= 0) transform.SetSiblingIndex(Mathf.Clamp(siblingIndex, 0, targetParent.childCount));
+        else transform.SetAsLastSibling();
+    }
+
+    // ---------- 新增方法：提升并恢复拖拽卡片 Canvas ----------
+
+    // 在开始拖拽时调用：确保本对象的 Canvas overrideSorting=true，sortingOrder = maxExisting + 1
+    private void ElevateDragCanvasForThis()
+    {
+        try
+        {
+            // 找到或创建 Canvas
+            Canvas myCanvas = GetComponent<Canvas>();
+            if (myCanvas == null)
+            {
+                tempDragCanvas = gameObject.AddComponent<Canvas>();
+                tempDragCanvasCreated = true;
+            }
+            else
+            {
+                tempDragCanvas = myCanvas;
+                tempDragCanvasCreated = false;
+            }
+
+            // 备份原值
+            tempDragCanvasOriginalOverride = tempDragCanvas.overrideSorting;
+            tempDragCanvasOriginalOrder = tempDragCanvas.sortingOrder;
+            tempDragCanvasOriginalRenderMode = tempDragCanvas.renderMode;
+            tempDragCanvasOriginalCamera = tempDragCanvas.worldCamera;
+
+            // 计算场景中最大 sortingOrder，然后加 1
+            int maxOrder = int.MinValue;
+            foreach (var c in FindObjectsOfType<Canvas>())
+            {
+                // 优先考虑 overrideSorting，但 sortingOrder 是我们关心的数值
+                if (c != null)
+                {
+                    maxOrder = Math.Max(maxOrder, c.sortingOrder);
+                }
+            }
+            if (maxOrder == int.MinValue) maxOrder = 0;
+
+            tempDragCanvas.overrideSorting = true;
+            tempDragCanvas.sortingOrder = maxOrder + 1;
+
+            // 与 overlayCanvas 保持 renderMode/camera 一致，避免不可见的问题
+            if (overlayCanvas != null)
+            {
+                tempDragCanvas.renderMode = overlayCanvas.renderMode;
+                if (overlayCanvas.renderMode == RenderMode.ScreenSpaceCamera)
+                    tempDragCanvas.worldCamera = overlayCanvas.worldCamera;
+            }
+
+            Debug.Log($"[CardDrag] Elevated drag canvas on '{gameObject.name}' to order {tempDragCanvas.sortingOrder} (created={tempDragCanvasCreated})");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[CardDrag] ElevateDragCanvasForThis 异常: {ex.Message}\n{ex.StackTrace}");
+        }
+    }
+
+    // 恢复或销毁我们临时创建/修改的 Canvas
+    private void RestoreDragCanvasForThis()
+    {
+        if (tempDragCanvas == null) return;
+
+        try
+        {
+            tempDragCanvas.overrideSorting = tempDragCanvasOriginalOverride;
+            tempDragCanvas.sortingOrder = tempDragCanvasOriginalOrder;
+            tempDragCanvas.renderMode = tempDragCanvasOriginalRenderMode;
+            tempDragCanvas.worldCamera = tempDragCanvasOriginalCamera;
+
+            if (tempDragCanvasCreated)
+            {
+                // 我们在运行时创建的 Canvas，销毁它
+                Destroy(tempDragCanvas);
+            }
+
+            Debug.Log($"[CardDrag] Restored drag canvas on '{gameObject.name}' (created={tempDragCanvasCreated})");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[CardDrag] RestoreDragCanvasForThis 异常: {ex.Message}\n{ex.StackTrace}");
+        }
+        finally
+        {
+            tempDragCanvas = null;
+            tempDragCanvasCreated = false;
+        }
+    }
+
+    // 对 clone 做相似的提升（如果 clone 存在）
+    private void ElevateCloneCanvas(GameObject clone)
+    {
+        if (clone == null) return;
+        try
+        {
+            Canvas c = clone.GetComponent<Canvas>();
+            if (c == null)
+            {
+                c = clone.AddComponent<Canvas>();
+                tempCloneCanvasCreated = true;
+                tempCloneCanvas = c;
+            }
+            else
+            {
+                tempCloneCanvasCreated = false;
+                tempCloneCanvas = c;
+            }
+
+            // 计算当前场景最大 order（与提升卡片时使用相同逻辑）
+            int maxOrder = int.MinValue;
+            foreach (var cc in FindObjectsOfType<Canvas>())
+            {
+                if (cc != null)
+                {
+                    maxOrder = Math.Max(maxOrder, cc.sortingOrder);
+                }
+            }
+            if (maxOrder == int.MinValue) maxOrder = 0;
+
+            tempCloneCanvas.overrideSorting = true;
+            // 设为和临时 drag canvas 相同或稍高，确保 clone 可见
+            tempCloneCanvas.sortingOrder = maxOrder + 1;
+
+            if (overlayCanvas != null)
+            {
+                tempCloneCanvas.renderMode = overlayCanvas.renderMode;
+                if (overlayCanvas.renderMode == RenderMode.ScreenSpaceCamera)
+                    tempCloneCanvas.worldCamera = overlayCanvas.worldCamera;
+            }
+
+            Debug.Log($"[CardDrag] Elevated clone canvas on '{clone.name}' to order {tempCloneCanvas.sortingOrder} (created={tempCloneCanvasCreated})");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[CardDrag] ElevateCloneCanvas 异常: {ex.Message}\n{ex.StackTrace}");
+        }
+    }
+
+    private void RestoreCloneCanvasIfAny()
+    {
+        if (tempCloneCanvas == null) return;
+
+        try
+        {
+            // 如果我们创建了 clone Canvas，则销毁；否则尽可能恢复 overrideSorting=false（但我们未备份 clone 原始值以简化）
+            if (tempCloneCanvasCreated)
+            {
+                Destroy(tempCloneCanvas);
+            }
+            else
+            {
+                // 无备份的情况下，尽量取消 overrideSorting（注意：如果 clone 原本就有特定设置，此处可能覆盖——通常 clone 是我们新建的）
+                tempCloneCanvas.overrideSorting = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[CardDrag] RestoreCloneCanvasIfAny 异常: {ex.Message}\n{ex.StackTrace}");
+        }
+        finally
+        {
+            tempCloneCanvas = null;
+            tempCloneCanvasCreated = false;
+        }
     }
 }

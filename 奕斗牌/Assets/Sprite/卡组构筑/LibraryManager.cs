@@ -31,6 +31,9 @@ public class LibraryManage : MonoBehaviour
     [Header("Options")]
     public bool clearOnStart = true;
 
+    // 当前内存中的玩家持有计数（在 BuildLibraryFromPlayerData 中初始化）
+    private Dictionary<int, int> currentPlayerCounts = new Dictionary<int, int>();
+
     // ---------- 编辑器时也能自动绑定 ----------
     void OnValidate()
     {
@@ -248,6 +251,9 @@ public class LibraryManage : MonoBehaviour
             Debug.LogWarning("[LibraryManage] 未找到玩家持有的卡片数据，Library 为空");
             return;
         }
+
+        // 初始化内存缓存（用于后续增减）
+        currentPlayerCounts = new Dictionary<int, int>(playerCounts);
 
         if (openPackage == null)
         {
@@ -679,5 +685,146 @@ public class LibraryManage : MonoBehaviour
         if (libraryPanel == null) return;
         for (int i = libraryPanel.childCount - 1; i >= 0; i--)
             Destroy(libraryPanel.GetChild(i).gameObject);
+    }
+
+    // ---------- 新增：对外接口与辅助方法（保存/更新卡池数量并更新 UI） ----------
+
+    // 安全修改玩家持有数并更新界面（delta 可以为正或负）
+    public bool TryChangePlayerCount(int cardId, int delta)
+    {
+        try
+        {
+            if (cardId <= 0) return false;
+            if (currentPlayerCounts == null) currentPlayerCounts = new Dictionary<int, int>();
+
+            int old = 0;
+            currentPlayerCounts.TryGetValue(cardId, out old);
+            int now = old + delta;
+            if (now < 0) return false; // 不允许负数
+
+            currentPlayerCounts[cardId] = now;
+
+            // 更新库中显示该 cardId 的实例（只更新计数/计数显示部分）
+            UpdateLibraryInstancesForCardId(cardId);
+
+            // 尝试写回 PlayerDataManager（若存在常见接口）
+            TryPersistToPlayerDataManager(cardId, now);
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[LibraryManage] TryChangePlayerCount 异常: {ex.Message}");
+            return false;
+        }
+    }
+
+    // 更新 libraryPanel 下对应 cardId 的所有项（尝试刷新 CardCounter 或 count 文本）
+    void UpdateLibraryInstancesForCardId(int cardId)
+    {
+        if (libraryPanel == null) return;
+
+        for (int i = 0; i < libraryPanel.childCount; i++)
+        {
+            var child = libraryPanel.GetChild(i);
+            if (child == null) continue;
+
+            bool matched = false;
+            var handlers = child.GetComponentsInChildren(typeof(CardDragHandler), true);
+            if (handlers != null && handlers.Length > 0)
+            {
+                foreach (var h in handlers)
+                {
+                    var ch = h as CardDragHandler;
+                    if (ch != null && ch.CardId == cardId)
+                    {
+                        matched = true;
+                        break;
+                    }
+                }
+            }
+
+            if (matched)
+            {
+                // 更新 CardCounter 组件显示
+                var counters = child.GetComponentsInChildren(typeof(CardCounter), true);
+                foreach (var c in counters)
+                {
+                    try
+                    {
+                        var cc = c as Component;
+                        TryInvokeSetCounter(cc, cardId);
+                    }
+                    catch { }
+                }
+
+                // 更新可能的 count 文本节点（name 包含 "count" 或 "stack"）
+                var texts = child.GetComponentsInChildren<Text>(true);
+                foreach (var t in texts)
+                {
+                    if (t == null) continue;
+                    var n = t.gameObject.name.ToLower();
+                    if (n.Contains("count") || n.Contains("stack"))
+                    {
+                        try
+                        {
+                            int val = 0;
+                            currentPlayerCounts.TryGetValue(cardId, out val);
+                            t.text = val.ToString();
+                        }
+                        catch { }
+                    }
+                }
+            }
+        }
+    }
+
+    // 通过反射尝试把变化写回 PlayerDataManager（兼容常见字段/方法）
+    void TryPersistToPlayerDataManager(int cardId, int newCount)
+    {
+        if (playerDataManager == null) return;
+        try
+        {
+            var pd = playerDataManager;
+            // 优先尝试 PlayerDeckDict 字典写回
+            var prop = pd.GetType().GetProperty("PlayerDeckDict");
+            if (prop != null)
+            {
+                var dictObj = prop.GetValue(pd) as System.Collections.IDictionary;
+                if (dictObj != null)
+                {
+                    dictObj[cardId] = newCount;
+                    // 若 PlayerDataManager 有保存/同步方法，这里不做调用（项目自有实现可能不同）
+                    Debug.Log($"[LibraryManage] 已写回 PlayerDataManager.PlayerDeckDict id={cardId} count={newCount}");
+                    return;
+                }
+            }
+
+            // 尝试 SetPlayerCardCount(int id, int cnt)
+            var m = pd.GetType().GetMethod("SetPlayerCardCount", BindingFlags.Public | BindingFlags.Instance);
+            if (m != null)
+            {
+                m.Invoke(pd, new object[] { cardId, newCount });
+                Debug.Log($"[LibraryManage] 调用 PlayerDataManager.SetPlayerCardCount(id,count) 写回 id={cardId} count={newCount}");
+                return;
+            }
+
+            // 尝试直接写入 PlayerDeck 数组字段（若存在）
+            var f = pd.GetType().GetField("PlayerDeck", BindingFlags.Public | BindingFlags.Instance);
+            if (f != null)
+            {
+                var arr = f.GetValue(pd) as int[];
+                if (arr != null && cardId >= 0 && cardId < arr.Length)
+                {
+                    arr[cardId] = newCount;
+                    Debug.Log($"[LibraryManage] 已写回 PlayerDataManager.PlayerDeck[{cardId}] = {newCount}");
+                    return;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[LibraryManage] TryPersistToPlayerDataManager 写回失败: {ex.Message}");
+        }
     }
 }
