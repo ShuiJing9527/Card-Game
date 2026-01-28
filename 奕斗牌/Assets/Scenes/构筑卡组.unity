@@ -1385,7 +1385,6 @@ GameObject:
   - component: {fileID: 1218201178}
   - component: {fileID: 1218201179}
   - component: {fileID: 1218201180}
-  - component: {fileID: 1218201181}
   - component: {fileID: 1218201183}
   m_Layer: 5
   m_Name: "\u5361\u7247\u5217\u8868"
@@ -1408,10 +1407,10 @@ RectTransform:
   m_Children: []
   m_Father: {fileID: 1697467936}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
-  m_AnchorMin: {x: 0.5, y: 0.5}
-  m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 0, y: 390.00003}
-  m_SizeDelta: {x: 1120, y: 0}
+  m_AnchorMin: {x: 0, y: 0}
+  m_AnchorMax: {x: 1, y: 1}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 0, y: 0}
   m_Pivot: {x: 0.5, y: 1}
 --- !u!114 &1218201179
 MonoBehaviour:
@@ -1451,26 +1450,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.ContentSizeFitter
   m_HorizontalFit: 0
   m_VerticalFit: 2
---- !u!114 &1218201181
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1218201177}
-  m_Enabled: 0
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 08eb520522582564e87c3a109c3e100d, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::DeckDropTarget
-  deckContent: {fileID: 1218201178}
-  placeMode: 0
-  deckEntryPrefab: {fileID: 0}
-  destroyDraggedOnDrop: 0
-  addCount: 1
-  maxPerCard: 3
-  acceptOnlyValidCardId: 1
-  acceptSound: {fileID: 0}
 --- !u!222 &1218201183
 CanvasRenderer:
   m_ObjectHideFlags: 0
@@ -1827,6 +1806,7 @@ GameObject:
   - component: {fileID: 1697467936}
   - component: {fileID: 1697467937}
   - component: {fileID: 1697467938}
+  - component: {fileID: 1697467941}
   m_Layer: 5
   m_Name: "\u6ED1\u8F68\u5207\u6362"
   m_TagString: Untagged
@@ -1846,8 +1826,8 @@ RectTransform:
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
-  - {fileID: 479961637}
   - {fileID: 1218201178}
+  - {fileID: 479961637}
   m_Father: {fileID: 490402098}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
@@ -1899,6 +1879,14 @@ MonoBehaviour:
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.RectMask2D
   m_Padding: {x: 0, y: 0, z: 0, w: 0}
   m_Softness: {x: 0, y: 0}
+--- !u!222 &1697467941
+CanvasRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1697467935}
+  m_CullTransparentMesh: 1
 --- !u!1 &1794278456
 GameObject:
   m_ObjectHideFlags: 0
@@ -2084,8 +2072,8 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 1, y: 1}
-  m_AnchoredPosition: {x: -0.0010070801, y: 0}
-  m_SizeDelta: {x: -0.7380371, y: 0}
+  m_AnchoredPosition: {x: 0, y: 0}
+  m_SizeDelta: {x: 0, y: 0}
   m_Pivot: {x: 0.5, y: 1}
 --- !u!114 &1892981605
 MonoBehaviour:
