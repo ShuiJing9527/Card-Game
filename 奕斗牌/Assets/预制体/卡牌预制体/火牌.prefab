@@ -1337,8 +1337,12 @@ MonoBehaviour:
   useAbsoluteDragSize: 1
   dragSize: {x: 300, y: 300}
   dragScaleMultiplier: 1.2
+  CardId: -1
+  IsStack: 0
+  StackCount: 0
   infoRoot: {fileID: 7453986676522487609}
   infoNodeName: "\u5361\u7247\u4FE1\u606F"
+  isPreview: 0
 --- !u!114 &1168429090798989611
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1731,7 +1735,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 6888470121871979394, guid: b7f11451ed5ebec428e8048bd5d16e18, type: 3}
       propertyPath: m_LocalPosition.x
-      value: -460
+      value: -440
       objectReference: {fileID: 0}
     - target: {fileID: 6888470121871979394, guid: b7f11451ed5ebec428e8048bd5d16e18, type: 3}
       propertyPath: m_LocalPosition.y
