@@ -1,0 +1,843 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.IO;
+using UnityEngine;
+
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
+
+[DefaultExecutionOrder(0)]
+public class PlayerDataManager : MonoBehaviour
+{
+    public static PlayerDataManager Instance { get; private set; }
+
+    [Header("玩家数据")]
+    public int playerCoins = 0;
+
+    [HideInInspector]
+    public Dictionary<int, int> playerCards = new Dictionary<int, int>(); // 库存/卡池
+
+    [Header("玩家卡组（兼容老数组）")]
+    public int[] playerDeck;
+
+    [HideInInspector]
+    public Dictionary<int, int> playerDeckDict = new Dictionary<int, int>(); // 卡组（cardId -> count）
+
+    [SerializeField, Tooltip("仅用于在 Inspector 查看（通过 SyncDictionaryToEditorLists 同步）")]
+    private List<int> editorKeys = new List<int>();
+    [SerializeField, Tooltip("仅用于在 Inspector 查看（通过 SyncDictionaryToEditorLists 同步）")]
+    private List<int> editorValues = new List<int>();
+
+    [Header("依赖与配置")]
+    public CardStore cardStore;
+    public TextAsset playerData;
+
+    [Tooltip("启动时是否用 playerData 覆盖磁盘文件（谨慎使用，建议默认 false）")]
+    public bool overwriteFromTextAssetOnStart = false;
+
+    [Header("抽卡/开包配置")]
+    public int openCost = 10;
+
+    [Header("自动保存控制")]
+    [Tooltip("开启后，修改数据会自动触发写盘（模拟旧行为）。建议默认关闭，由上层显式调用 SavePlayerData。")]
+    public bool autoSave = false;
+    [Tooltip("开启后，仅当数据实际改变时才写盘（避免重复写入相同内容）")]
+    public bool onlySaveOnChange = true;
+
+    [Header("金币保存控制")]
+    [Tooltip("如果勾选：每次保存都会把当前 Inspector 中的 playerCoins 写入磁盘。")]
+    public bool autoUpdateCoinsOnSave = false;
+
+    [Tooltip("在 Inspector 修改 playerCoins 后，勾选此项并保存一次，会写入该 Inspector 值，保存后此选项自动取消。")]
+    public bool applyInspectorCoinsOnce = false;
+
+    [Header("保存/写入选项")]
+    [Tooltip("写盘时是否根据内存内容完全覆盖 CSV（推荐 true）。关闭时会尝试保留磁盘上除 card/deck/coins 之外的其它行（不推荐）。")]
+    public bool writeFromMemoryOnly = true;
+
+    public string saveFileName = "playerdata.csv";
+
+    public event Action OnPlayerDataLoaded;
+    string savePath => GetSavePath();
+
+    // 事件：卡组变化（cardId, newCount）
+    public event Action<int, int> OnDeckChanged;
+    // 事件：库存变化（cardId, newCount）
+    public event Action<int, int> OnInventoryChanged;
+    // 事件：保存完成
+    public event Action OnPlayerDataSaved;
+
+    // 防重复初始化标志
+    private bool dataInitialized = false;
+
+    [Header("数据变更控制")]
+    [Tooltip("标记是否有未保存的内存数据变更（可在 Inspector 手动勾选/取消）")]
+    [SerializeField] public bool dataChanged = false;
+
+    // 上一次保存的 Hash，用于检测相同内容（仅在 onlySaveOnChange 启用时维护）
+    private int lastSavedHash = 0;
+
+    void Awake()
+    {
+        // 单例保护
+        if (Instance != null && Instance != this)
+        {
+            Debug.LogWarning($"PlayerDataManager: 检测到重复实例，销毁当前实例 name={gameObject.name} id={GetInstanceID()} 主实例 id={Instance.GetInstanceID()}");
+#if UNITY_EDITOR
+            DestroyImmediate(gameObject);
+#else
+            Destroy(gameObject);
+#endif
+            return;
+        }
+
+        Instance = this;
+        DontDestroyOnLoad(gameObject);
+
+        if (cardStore == null)
+            cardStore = FindObjectOfType<CardStore>();
+
+        SetupCardStoreListener();
+    }
+
+    void SetupCardStoreListener()
+    {
+        if (cardStore == null)
+        {
+            Debug.Log("PlayerDataManager: 未找到 CardStore，直接初始化玩家数据（card 校验将不可用）");
+            InitPlayerData();
+            return;
+        }
+
+        try
+        {
+            if (cardStore.IsCardsReady)
+            {
+                InitPlayerData();
+                return;
+            }
+
+            cardStore.OnCardsReady += OnCardStoreReady;
+        }
+        catch (Exception)
+        {
+            // 兼容各种 CardStore 实现
+            InitPlayerData();
+        }
+    }
+
+    void OnCardStoreReady()
+    {
+        if (cardStore == null) return;
+        try { cardStore.OnCardsReady -= OnCardStoreReady; } catch { }
+        InitPlayerData();
+    }
+
+    void InitPlayerData()
+    {
+        if (dataInitialized)
+        {
+            Debug.Log("PlayerDataManager: InitPlayerData 已初始化，跳过重复调用");
+            return;
+        }
+        dataInitialized = true;
+
+        EnsurePlayerDeckInitialized();
+
+        WriteBundledTextAssetToDisk();
+        LoadPlayerData();
+    }
+
+    string GetSavePath()
+    {
+#if UNITY_EDITOR
+        return Path.Combine(Application.dataPath, "Datas/Player", saveFileName);
+#else
+        return Path.Combine(Application.persistentDataPath, saveFileName);
+#endif
+    }
+
+    void WriteBundledTextAssetToDisk()
+    {
+        if (playerData == null) return;
+
+        try
+        {
+            string dir = Path.GetDirectoryName(savePath);
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+
+            if (!File.Exists(savePath))
+            {
+                File.WriteAllText(savePath, playerData.text);
+                Debug.Log($"PlayerDataManager: 初始内置 CSV 写入磁盘: {savePath}");
+#if UNITY_EDITOR
+                AssetDatabase.Refresh();
+#endif
+                return;
+            }
+
+#if UNITY_EDITOR
+            if (overwriteFromTextAssetOnStart)
+            {
+                Debug.LogWarning("PlayerDataManager: overwriteFromTextAssetOnStart 为 true，将用内置 CSV 覆盖磁盘文件。");
+                File.WriteAllText(savePath, playerData.text);
+                AssetDatabase.Refresh();
+            }
+#else
+            if (overwriteFromTextAssetOnStart)
+            {
+                Debug.LogWarning("PlayerDataManager: 在非编辑器环境中启用了 overwriteFromTextAssetOnStart，这可能覆盖玩家数据，建议关闭。");
+            }
+#endif
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"PlayerDataManager: 写入内置 CSV 失败: {ex.Message}");
+        }
+    }
+
+    public void LoadPlayerData()
+    {
+        try
+        {
+            Debug.Log($"PlayerDataManager: 开始加载玩家数据 -> {savePath}");
+            string[] rows = null;
+
+            if (playerData != null && !File.Exists(savePath))
+            {
+                rows = playerData.text.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                Debug.Log("PlayerDataManager: 从内置 CSV 加载玩家数据（磁盘文件不存在）");
+            }
+            else if (File.Exists(savePath))
+            {
+                rows = File.ReadAllLines(savePath);
+                Debug.Log($"PlayerDataManager: 从磁盘文件加载玩家数据: {savePath}");
+            }
+            else
+            {
+                Debug.Log("PlayerDataManager: 未找到玩家数据文件，加载默认空数据");
+                playerCards = new Dictionary<int, int>();
+                playerDeckDict = new Dictionary<int, int>();
+                EnsurePlayerDeckInitialized();
+                return;
+            }
+
+            EnsurePlayerDeckInitialized();
+
+            // reset
+            playerCards = new Dictionary<int, int>();
+            playerDeckDict = new Dictionary<int, int>();
+            if (playerDeck != null)
+            {
+                for (int i = 0; i < playerDeck.Length; i++) playerDeck[i] = 0;
+            }
+            playerCoins = 0;
+
+            foreach (var rawRow in rows)
+            {
+                if (string.IsNullOrWhiteSpace(rawRow)) continue;
+                string line = rawRow.Trim().Trim('\r');
+                if (string.IsNullOrWhiteSpace(line)) continue;
+
+                var parts = line.Split(',');
+                if (parts.Length < 2) continue;
+
+                string key = parts[0].Trim().ToLower();
+
+                if (key == "coins")
+                {
+                    if (parts.Length >= 2 && int.TryParse(parts[1].Trim(), out int coins))
+                    {
+                        playerCoins = coins;
+                    }
+                    continue;
+                }
+
+                if (key == "card" && parts.Length >= 3)
+                {
+                    if (!int.TryParse(parts[1].Trim(), out int id)) continue;
+                    if (!int.TryParse(parts[2].Trim(), out int count)) continue;
+
+                    if (count > 0) playerCards[id] = count;
+                    continue;
+                }
+
+                if (key == "deck" && parts.Length >= 3)
+                {
+                    if (!int.TryParse(parts[1].Trim(), out int id)) continue;
+                    if (!int.TryParse(parts[2].Trim(), out int num)) continue;
+
+                    if (num > 0) playerDeckDict[id] = num;
+                    else playerDeckDict.Remove(id);
+
+                    if (playerDeck != null && id >= 0 && id < playerDeck.Length)
+                    {
+                        playerDeck[id] = Math.Max(0, num);
+                    }
+                    continue;
+                }
+            }
+
+            // 加载完成后初始化最后保存 Hash
+            lastSavedHash = CalculateDataHash();
+            dataChanged = false;
+
+            Debug.Log($"PlayerDataManager: 加载完成 -> coins={playerCoins} inventoryEntries={playerCards.Count} deckEntries={playerDeckDict.Count}");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"PlayerDataManager: 加载玩家数据失败: {ex.Message}\n{ex.StackTrace}");
+        }
+
+        // 在 LoadPlayerData 结束前触发（确保订阅者知道数据已就绪）
+        try
+        {
+            OnPlayerDataLoaded?.Invoke();
+        }
+        catch { }
+    }
+
+    // ---------- 计算 Hash ----------
+    private int CalculateDataHash()
+    {
+        unchecked
+        {
+            int hash = 17;
+            hash = hash * 31 + playerCoins.GetHashCode();
+            if (playerCards != null)
+            {
+                foreach (var kv in playerCards)
+                {
+                    hash = hash * 31 + kv.Key.GetHashCode();
+                    hash = hash * 31 + kv.Value.GetHashCode();
+                }
+            }
+            if (playerDeckDict != null)
+            {
+                foreach (var kv in playerDeckDict)
+                {
+                    hash = hash * 31 + kv.Key.GetHashCode();
+                    hash = hash * 31 + kv.Value.GetHashCode();
+                }
+            }
+            return hash;
+        }
+    }
+
+    // 公开接口：coins
+    public void SetCoins(int coins, bool saveOverride = false)
+    {
+        coins = Mathf.Max(0, coins);
+        if (playerCoins == coins)
+        {
+            return;
+        }
+
+        int old = playerCoins;
+        playerCoins = coins;
+        Debug.Log($"PlayerDataManager: SetCoins {old} -> {playerCoins} (autoSave={autoSave} saveOverride={saveOverride})");
+
+        dataChanged = true;
+        if (saveOverride || autoSave)
+        {
+            SavePlayerData();
+        }
+    }
+
+    public int GetCoins() => playerCoins;
+
+    // 公开接口：库存/卡组
+    public int GetCardCount(int cardId)
+    {
+        if (cardId < 0) return 0;
+        if (playerCards == null) playerCards = new Dictionary<int, int>();
+        if (playerCards.TryGetValue(cardId, out int c)) return c;
+        return 0;
+    }
+
+    public void SetCardCountNoSave(int cardId, int count)
+    {
+        if (cardId < 0) return;
+        if (playerCards == null) playerCards = new Dictionary<int, int>();
+        count = Math.Max(0, count);
+
+        int oldCount = GetCardCount(cardId);
+        if (oldCount == count) return;
+
+        if (count == 0) playerCards.Remove(cardId);
+        else playerCards[cardId] = count;
+
+        dataChanged = true;
+        OnInventoryChanged?.Invoke(cardId, GetCardCount(cardId));
+    }
+
+    public void SetCardCount(int cardId, int count)
+    {
+        SetCardCountNoSave(cardId, count);
+        if (autoSave) SavePlayerData();
+    }
+
+    public int GetDeckCount(int cardId)
+    {
+        if (cardId < 0) return 0;
+        if (playerDeckDict != null && playerDeckDict.TryGetValue(cardId, out int v)) return v;
+        if (playerDeck != null && cardId >= 0 && cardId < playerDeck.Length) return playerDeck[cardId];
+        return 0;
+    }
+
+    public void SetDeckCountNoSave(int cardId, int count)
+    {
+        if (cardId < 0) return;
+        if (playerDeckDict == null) playerDeckDict = new Dictionary<int, int>();
+
+        count = Math.Max(0, count);
+
+        int oldCount = GetDeckCount(cardId);
+        if (oldCount == count) return;
+
+        if (count == 0)
+        {
+            playerDeckDict.Remove(cardId);
+            if (playerDeck != null && cardId >= 0 && cardId < playerDeck.Length) playerDeck[cardId] = 0;
+        }
+        else
+        {
+            playerDeckDict[cardId] = count;
+            if (playerDeck != null && cardId >= 0 && cardId < playerDeck.Length) playerDeck[cardId] = count;
+        }
+
+        dataChanged = true;
+        OnDeckChanged?.Invoke(cardId, GetDeckCount(cardId));
+    }
+
+    public void SetDeckCount(int cardId, int count)
+    {
+        SetDeckCountNoSave(cardId, count);
+        if (autoSave) SavePlayerData();
+    }
+
+    public void AddDeckCardNoSave(int cardId, int add = 1)
+    {
+        if (cardId < 0 || add <= 0) return;
+        int cur = GetDeckCount(cardId);
+        SetDeckCountNoSave(cardId, cur + add);
+    }
+
+    public void AddDeckCard(int cardId, int add = 1)
+    {
+        AddDeckCardNoSave(cardId, add);
+        if (autoSave) SavePlayerData();
+    }
+
+    public void RemoveDeckCardNoSave(int cardId, int remove = int.MaxValue)
+    {
+        if (cardId < 0) return;
+        int cur = GetDeckCount(cardId);
+        if (cur <= 0) return;
+
+        if (remove >= cur) SetDeckCountNoSave(cardId, 0);
+        else SetDeckCountNoSave(cardId, cur - remove);
+    }
+
+    public void RemoveDeckCard(int cardId, int remove = int.MaxValue)
+    {
+        RemoveDeckCardNoSave(cardId, remove);
+        if (autoSave) SavePlayerData();
+    }
+
+    public void RemoveCard(int cardId)
+    {
+        if (playerCards == null) return;
+        if (playerCards.Remove(cardId))
+        {
+            dataChanged = true;
+            if (autoSave) SavePlayerData();
+            OnInventoryChanged?.Invoke(cardId, 0);
+        }
+    }
+
+    public void AddDrawnCards(List<int> drawnIds)
+    {
+        if (drawnIds == null || drawnIds.Count == 0) return;
+        if (playerCards == null) playerCards = new Dictionary<int, int>();
+
+        foreach (var id in drawnIds)
+        {
+            if (id < 0) continue;
+            if (playerCards.TryGetValue(id, out int cur)) playerCards[id] = cur + 1;
+            else playerCards[id] = 1;
+            OnInventoryChanged?.Invoke(id, playerCards[id]);
+        }
+
+        dataChanged = true;
+        if (autoSave) SavePlayerData();
+    }
+
+    public void ClearAllCards()
+    {
+        if (playerCards == null) return;
+        playerCards.Clear();
+        dataChanged = true;
+        if (autoSave) SavePlayerData();
+    }
+
+    public bool CanAffordOpen() => playerCoins >= openCost;
+
+    public bool TryConsumeCoinsForOpen(int cost = -1)
+    {
+        int actualCost = cost < 0 ? openCost : cost;
+        if (playerCoins < actualCost)
+        {
+            Debug.LogWarning($"PlayerDataManager: 金币不足，当前 {playerCoins}，需要 {actualCost}");
+            return false;
+        }
+
+        playerCoins -= actualCost;
+        if (playerCoins < 0) playerCoins = 0;
+        dataChanged = true;
+        if (autoSave) SavePlayerData();
+        Debug.Log($"PlayerDataManager: 扣除金币 {actualCost}，剩余金币 {playerCoins}");
+        return true;
+    }
+
+    // 原子化转移
+    public bool TryTransferCardToDeckNoSave(int cardId, int amount = 1)
+    {
+        if (cardId < 0 || amount <= 0) return false;
+        if (playerCards == null) playerCards = new Dictionary<int, int>();
+        if (playerDeckDict == null) playerDeckDict = new Dictionary<int, int>();
+
+        int inv = GetCardCount(cardId);
+        if (inv < amount) return false;
+
+        int newInv = inv - amount;
+        if (newInv <= 0) playerCards.Remove(cardId);
+        else playerCards[cardId] = newInv;
+
+        int curDeck = GetDeckCount(cardId);
+        int newDeck = curDeck + amount;
+        playerDeckDict[cardId] = newDeck;
+        if (playerDeck != null && cardId >= 0 && cardId < playerDeck.Length)
+            playerDeck[cardId] = newDeck;
+
+        dataChanged = true;
+
+        OnInventoryChanged?.Invoke(cardId, newInv);
+        OnDeckChanged?.Invoke(cardId, newDeck);
+        return true;
+    }
+
+    public bool TryTransferCardToDeck(int cardId, int amount = 1)
+    {
+        bool ok = TryTransferCardToDeckNoSave(cardId, amount);
+        if (!ok) return false;
+
+        if (autoSave) SavePlayerData();
+        return true;
+    }
+
+    public bool TryTransferCardFromDeckNoSave(int cardId, int amount = 1)
+    {
+        if (cardId < 0 || amount <= 0) return false;
+        if (playerDeckDict == null) playerDeckDict = new Dictionary<int, int>();
+        if (playerCards == null) playerCards = new Dictionary<int, int>();
+
+        int deckCount = GetDeckCount(cardId);
+        if (deckCount < amount) return false;
+
+        int newDeck = deckCount - amount;
+        if (newDeck <= 0) playerDeckDict.Remove(cardId);
+        else playerDeckDict[cardId] = newDeck;
+        if (playerDeck != null && cardId >= 0 && cardId < playerDeck.Length)
+            playerDeck[cardId] = newDeck;
+
+        int inv = GetCardCount(cardId);
+        int newInv = inv + amount;
+        playerCards[cardId] = newInv;
+
+        dataChanged = true;
+
+        OnDeckChanged?.Invoke(cardId, newDeck);
+        OnInventoryChanged?.Invoke(cardId, newInv);
+        return true;
+    }
+
+    public bool TryTransferCardFromDeck(int cardId, int amount = 1)
+    {
+        bool ok = TryTransferCardFromDeckNoSave(cardId, amount);
+        if (!ok) return false;
+
+        if (autoSave) SavePlayerData();
+        return true;
+    }
+
+    // Save（写内存到磁盘，简单直接，避免合并错误）
+    public void SavePlayerData()
+    {
+        try
+        {
+            if (Instance != this)
+            {
+                Debug.LogWarning($"PlayerDataManager.SavePlayerData: 被非主实例调用，已忽略。thisId={GetInstanceID()} mainId={Instance?.GetInstanceID()}");
+                Debug.Log($"调用堆栈:\n{Environment.StackTrace}");
+                return;
+            }
+
+            if (onlySaveOnChange)
+            {
+                int currentHash = CalculateDataHash();
+                if (!dataChanged && currentHash == lastSavedHash)
+                {
+                    Debug.Log("PlayerDataManager: SavePlayerData 跳过（onlySaveOnChange, 无数据变更）");
+                    return;
+                }
+            }
+
+            Debug.Log($"PlayerDataManager: SavePlayerData 开始 -> coins={playerCoins} inventory={playerCards?.Count} deck={playerDeckDict?.Count}");
+
+            // 决定 coins 行
+            string coinsLineToWrite = $"coins,{playerCoins}";
+            if (!autoUpdateCoinsOnSave && applyInspectorCoinsOnce)
+            {
+                // applyInspectorCoinsOnce 优先写入 inspector 值，然后取消标志
+                coinsLineToWrite = $"coins,{playerCoins}";
+                applyInspectorCoinsOnce = false;
+#if UNITY_EDITOR
+                EditorUtility.SetDirty(this);
+#endif
+                Debug.Log("PlayerDataManager: applyInspectorCoinsOnce 被使用，已写入 Inspector 中的 coins，并将该选项重置为 false。");
+            }
+            else if (!autoUpdateCoinsOnSave && !applyInspectorCoinsOnce)
+            {
+                // 如果非 autoUpdate 且未 applyInspectorCoinsOnce，依然以内存中的 playerCoins 为准（一致性）
+                coinsLineToWrite = $"coins,{playerCoins}";
+            }
+            else if (autoUpdateCoinsOnSave)
+            {
+                coinsLineToWrite = $"coins,{playerCoins}";
+            }
+
+            var outLines = new List<string>();
+            // 先写 coins
+            outLines.Add(coinsLineToWrite);
+
+            // 写 playerCards（inventory）
+            if (playerCards != null)
+            {
+                foreach (var kv in playerCards)
+                {
+                    if (kv.Value > 0)
+                        outLines.Add($"card,{kv.Key},{kv.Value}");
+                }
+            }
+
+            // 写 deck：优先写 playerDeckDict 中的条目
+            var writtenDeckIds = new HashSet<int>();
+            if (playerDeckDict != null)
+            {
+                foreach (var kv in playerDeckDict)
+                {
+                    if (kv.Value > 0)
+                    {
+                        outLines.Add($"deck,{kv.Key},{kv.Value}");
+                        writtenDeckIds.Add(kv.Key);
+                    }
+                }
+            }
+
+            // 对于 legacy playerDeck 数组中仍有数据且未在 playerDeckDict 中的，写入
+            if (playerDeck != null)
+            {
+                for (int i = 0; i < playerDeck.Length; i++)
+                {
+                    int cnt = playerDeck[i];
+                    if (cnt > 0 && !writtenDeckIds.Contains(i))
+                        outLines.Add($"deck,{i},{cnt}");
+                }
+            }
+
+            string dir = Path.GetDirectoryName(savePath);
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+
+            File.WriteAllLines(savePath, outLines.ToArray());
+            Debug.Log($"PlayerDataManager: 已保存玩家数据到: {savePath} (entries={outLines.Count})");
+
+            // 更新保存状态
+            lastSavedHash = CalculateDataHash();
+            dataChanged = false;
+
+#if UNITY_EDITOR
+            if (overwriteFromTextAssetOnStart) AssetDatabase.Refresh();
+#endif
+
+            OnPlayerDataSaved?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"PlayerDataManager: 保存玩家数据失败: {ex.Message}\n{ex.StackTrace}");
+        }
+    }
+
+    [ContextMenu("TrimUnknownCardIds")]
+    public void TrimUnknownCardIds()
+    {
+#if UNITY_EDITOR
+        if (cardStore == null || cardStore.cardList == null)
+        {
+            Debug.LogWarning("TrimUnknownCardIds: cardStore 不可用，无法修剪");
+            return;
+        }
+        var valid = new HashSet<int>();
+        foreach (var c in cardStore.cardList) valid.Add(c.Card_ID);
+
+        var toRemove = new List<int>();
+        foreach (var kv in playerCards)
+            if (!valid.Contains(kv.Key)) toRemove.Add(kv.Key);
+
+        foreach (var id in toRemove) playerCards.Remove(id);
+
+        toRemove.Clear();
+        foreach (var kv in playerDeckDict)
+            if (!valid.Contains(kv.Key)) toRemove.Add(kv.Key);
+        foreach (var id in toRemove) playerDeckDict.Remove(id);
+
+        SavePlayerData();
+        Debug.Log($"TrimUnknownCardIds: 移除了 {toRemove.Count} 个未定义的 card id");
+#else
+        Debug.LogWarning("TrimUnknownCardIds 仅在编辑器可用");
+#endif
+    }
+
+    [ContextMenu("SyncDictionaryToEditorLists")]
+    public void SyncDictionaryToEditorLists()
+    {
+#if UNITY_EDITOR
+        editorKeys.Clear();
+        editorValues.Clear();
+        if (playerCards != null)
+        {
+            foreach (var kv in playerCards)
+            {
+                editorKeys.Add(kv.Key);
+                editorValues.Add(kv.Value);
+            }
+        }
+
+        EditorUtility.SetDirty(this);
+        Debug.Log($"PlayerDataManager: 已同步字典到 editor lists (count={editorKeys.Count})");
+#else
+        Debug.LogWarning("SyncDictionaryToEditorLists 仅在编辑器可用");
+#endif
+    }
+
+    [ContextMenu("SyncEditorListsToDictionary")]
+    public void SyncEditorListsToDictionary()
+    {
+#if UNITY_EDITOR
+        playerCards = new Dictionary<int, int>();
+        int n = Math.Min(editorKeys.Count, editorValues.Count);
+        for (int i = 0; i < n; i++)
+        {
+            int id = editorKeys[i];
+            int cnt = editorValues[i];
+            if (cnt > 0) playerCards[id] = cnt;
+        }
+        SavePlayerData();
+        EditorUtility.SetDirty(this);
+        Debug.Log($"PlayerDataManager: 已从 editor lists 同步到字典 (count={playerCards.Count})");
+#else
+        Debug.LogWarning("SyncEditorListsToDictionary 仅在编辑器可用");
+#endif
+    }
+
+    void EnsurePlayerDeckInitialized()
+    {
+        int desired = 0;
+        if (cardStore != null)
+        {
+            try
+            {
+                var csType = cardStore.GetType();
+                var fd = csType.GetField("cardData");
+                if (fd != null)
+                {
+                    var val = fd.GetValue(cardStore) as System.Collections.ICollection;
+                    if (val != null) desired = val.Count;
+                }
+
+                if (desired == 0)
+                {
+                    var fl = csType.GetField("cardList");
+                    if (fl != null)
+                    {
+                        var val2 = fl.GetValue(cardStore) as System.Collections.ICollection;
+                        if (val2 != null) desired = val2.Count;
+                    }
+                }
+
+                if (desired == 0)
+                {
+                    var pd = csType.GetProperty("cardData");
+                    if (pd != null)
+                    {
+                        var val3 = pd.GetValue(cardStore, null) as System.Collections.ICollection;
+                        if (val3 != null) desired = val3.Count;
+                    }
+                }
+                if (desired == 0)
+                {
+                    var pl = csType.GetProperty("cardList");
+                    if (pl != null)
+                    {
+                        var val4 = pl.GetValue(cardStore, null) as System.Collections.ICollection;
+                        if (val4 != null) desired = val4.Count;
+                    }
+                }
+            }
+            catch { }
+        }
+
+        if (desired <= 0)
+        {
+            if (playerDeck == null) playerDeck = new int[0];
+            return;
+        }
+
+        if (playerDeck == null || playerDeck.Length != desired)
+        {
+            playerDeck = new int[desired];
+            Debug.Log($"PlayerDataManager: playerDeck 已初始化，长度 = {desired}");
+        }
+    }
+
+    // 调试：打印当前内存状态（方便定位 UI/拖拽与内存不同步问题）
+    [ContextMenu("DebugDumpCurrentState")]
+    public void DebugDumpCurrentState()
+    {
+        try
+        {
+            Debug.Log($"PlayerDataManager DebugDump -> coins={playerCoins}");
+            if (playerCards != null)
+                Debug.Log($"playerCards ({playerCards.Count}): {string.Join(", ", GetPairsStr(playerCards))}");
+            else Debug.Log("playerCards: null");
+
+            if (playerDeckDict != null)
+                Debug.Log($"playerDeckDict ({playerDeckDict.Count}): {string.Join(", ", GetPairsStr(playerDeckDict))}");
+            else Debug.Log("playerDeckDict: null");
+
+            if (playerDeck != null) Debug.Log($"playerDeck array len={playerDeck.Length}");
+            else Debug.Log("playerDeck: null");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"DebugDumpCurrentState failed: {ex.Message}");
+        }
+    }
+
+    private IEnumerable<string> GetPairsStr(Dictionary<int, int> dict)
+    {
+        foreach (var kv in dict) yield return $"{kv.Key}:{kv.Value}";
+    }
+}
