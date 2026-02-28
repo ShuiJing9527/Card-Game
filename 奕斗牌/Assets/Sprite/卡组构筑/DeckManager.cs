@@ -1,1148 +1,588 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
-using System.Text;
 using UnityEngine;
-using UnityEngine.EventSystems;
+using TMPro;
 using UnityEngine.UI;
 
-public class DeckManager : MonoBehaviour, ICardDropTarget
+public class DeckManager : MonoBehaviour
 {
-    [Header("Source / UI")]
-    public LibraryManage librarySource;
-    public RectTransform deckPanel;
-    public GameObject deckEntryPrefab;
+    [Header("UI")]
+    public Transform contentParent;                 // ScrollView Content (必填)
+    public TextMeshProUGUI debugText;               // 可选，显示调试信息
 
-    [Header("Fallback CSV (if no PlayerDataManager)")]
-    public TextAsset playerDataCsv;
+    [Header("Fallback CSV")]
+    public TextAsset fallbackPlayerDataCsv;
 
-    [Header("Runtime Options")]
-    public bool clearOnStart = true;
+    [Header("Attach options (when calling InstantiateCardItem)")]
+    // 恢复默认：Attach Info 可由 Inspector 控制（通常为 true），
+    // 我们会在实例化后精确隐藏信息面板，保留装饰（边框/勾玉/等级）
+    public bool attachInfo = true;
 
-    public bool hideCardInfoInDeck = true;
+    [Header("CSV merge strategy")]
+    public CsvMergeStrategy csvMergeStrategy = CsvMergeStrategy.PreferDeckThenCard;
 
-    private CardStore _cardStore;
-    private OpenPackage _openPackage;
-    private PlayerDataManager _playerDataManager;
-
-    private MethodInfo GetCardStoreInstantiateMethod(string name)
+    public enum CsvMergeStrategy
     {
-        if (_cardStore == null) return null;
-        try { return _cardStore.GetType().GetMethod(name, BindingFlags.Public | BindingFlags.Instance); }
-        catch { return null; }
+        PreferDeckThenCard,
+        PreferCardThenDeck,
+        SumBoth
     }
 
-    void OnValidate()
-    {
-        if (librarySource == null) librarySource = FindObjectOfType<LibraryManage>();
-        if (_cardStore == null)
-        {
-            if (CardStore.Instance != null) _cardStore = CardStore.Instance;
-            else
-            {
-                var cs = FindObjectOfType<CardStore>();
-                if (cs != null) _cardStore = cs;
-            }
-        }
+    [Header("Debug / Test Options")]
+    public bool forceUseCsv = false;      // 强制使用 CSV（忽略 PlayerDataManager）用于调试
+    public bool testOnlyDeckLines = true; // 解析 CSV 时只解析 tag == "deck"（用于定位问题）
 
-        if (_open_package_missing_check()) { }
-        if (_playerDataManager == null)
-        {
-            var pd = FindObjectOfType<PlayerDataManager>();
-            if (pd != null) _playerDataManager = pd;
-        }
-    }
-
-    private bool _open_package_missing_check()
-    {
-        if (_openPackage == null && _cardStore != null)
-            BindOpenPackageFromCardStore();
-
-        if (_openPackage == null)
-        {
-            var op2 = FindObjectOfType<OpenPackage>();
-            if (op2 != null) _openPackage = op2;
-        }
-        return true;
-    }
-
-    void Reset() { OnValidate(); }
-
-    private void BindOpenPackageFromCardStore()
-    {
-        try { _openPackage = _cardStore.GetComponent<OpenPackage>(); } catch { _openPackage = null; }
-    }
+    // cached instances
+    CardStore cardStore => CardStore.Instance;
+    PlayerDataManager pData => PlayerDataManager.Instance;
 
     void Start()
     {
-        if (deckPanel == null) return;
-
-        if (librarySource == null) librarySource = FindObjectOfType<LibraryManage>();
-        if (_cardStore == null && CardStore.Instance != null) _cardStore = CardStore.Instance;
-        if (_playerDataManager == null && PlayerDataManager.Instance != null) _playerDataManager = PlayerDataManager.Instance;
-
-        if (_openPackage == null && _cardStore != null) BindOpenPackageFromCardStore();
-        if (_openPackage == null) _openPackage = FindObjectOfType<OpenPackage>();
-
-        if (_playerDataManager == null) _playerDataManager = FindObjectOfType<PlayerDataManager>();
-        if (_playerDataManager != null)
-        {
-            try { _playerDataManager.OnDeckChanged += OnPlayerDeckChanged; } catch { }
-            try { _playerDataManager.OnPlayerDataLoaded += OnPlayerDataLoaded; } catch { }
-        }
-
-        if (clearOnStart) ClearDeckPanel();
-
-        StartCoroutine(WaitThenBuild());
+        RefreshDeckUI();
     }
 
-    private void OnDestroy()
+    // public entry
+    public void RefreshDeckUI()
     {
-        if (_playerDataManager != null)
+        if (contentParent == null)
         {
-            try { _playerDataManager.OnDeckChanged -= OnPlayerDeckChanged; } catch { }
-            try { _playerDataManager.OnPlayerDataLoaded -= OnPlayerDataLoaded; } catch { }
+            DebugLog("DeckManager: contentParent 未绑定");
+            return;
         }
-    }
 
-    IEnumerator WaitThenBuild()
-    {
-        float timeout = 3f;
-        float t = 0f;
-        bool readyFlag = false;
-        Action onReadyHandler = null;
+        ClearSlots();
 
-        Func<CardStore, bool> isReady = (cs) =>
+        Dictionary<int, int> deckDict = null;
+        string usedSource = "none";
+
+        // 1) 尝试从 PlayerDataManager 读取（除非强制使用 CSV）
+        if (!forceUseCsv && pData != null)
         {
-            if (cs == null) return true;
             try
             {
-                var prop = cs.GetType().GetProperty("IsCardsReady");
-                if (prop != null)
+                var fromPd = GetDeckFromPlayerDataManager();
+                if (fromPd != null && fromPd.Count > 0)
                 {
-                    var v = prop.GetValue(cs);
-                    if (v is bool b) return b;
+                    deckDict = fromPd;
+                    usedSource = "PlayerDataManager";
                 }
-                var field = cs.GetType().GetField("cardList", BindingFlags.Public | BindingFlags.Instance);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"DeckManager: 读取 PlayerDataManager 时异常: {ex.Message}");
+            }
+        }
+
+        // 2) 回退到 CSV（或强制使用 CSV）
+        if ((deckDict == null || deckDict.Count == 0) && fallbackPlayerDataCsv != null)
+        {
+            try
+            {
+                deckDict = ParsePlayerDataCsvSimple(fallbackPlayerDataCsv.text, csvMergeStrategy, testOnlyDeckLines);
+                usedSource = "FallbackCSV";
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"DeckManager: 解析 CSV 时异常: {ex.Message}");
+            }
+        }
+
+        if (deckDict == null || deckDict.Count == 0)
+        {
+            DebugLog($"DeckManager: 未找到 deck 数据（source={usedSource}）");
+            return;
+        }
+
+        // 调试输出读取到的条目
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"DeckManager: 使用数据源 = {usedSource}，共 {deckDict.Count} 条");
+            int c = 0;
+            foreach (var kv in deckDict)
+            {
+                sb.AppendLine($"  id={kv.Key} -> count={kv.Value}");
+                if (++c > 50) { sb.AppendLine("  ..."); break; }
+            }
+            DebugLog(sb.ToString());
+        }
+
+        // 尝试按 CardStore.cardList 的顺序来排列（如果可用）
+        List<KeyValuePair<int, int>> ordered;
+        try
+        {
+            var indexMap = new Dictionary<int, int>();
+            if (cardStore != null)
+            {
+                var csType = cardStore.GetType();
+                IEnumerable<object> cardListEnum = null;
+
+                var field = csType.GetField("cardList", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic)
+                            ?? csType.GetField("CardList", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
                 if (field != null)
                 {
-                    var v = field.GetValue(cs) as System.Collections.IEnumerable;
-                    if (v != null)
-                    {
-                        foreach (var _ in v) return true;
-                        return false;
-                    }
-                }
-            }
-            catch { }
-            return true;
-        };
-
-        if (_cardStore != null && !isReady(_cardStore))
-        {
-            try
-            {
-                onReadyHandler = new Action(() => { readyFlag = true; });
-                _cardStore.OnCardsReady += onReadyHandler;
-            }
-            catch { onReadyHandler = null; }
-        }
-        else readyFlag = true;
-
-        while (!readyFlag && t < timeout)
-        {
-            if (_cardStore == null && CardStore.Instance != null)
-            {
-                _cardStore = CardStore.Instance;
-                if (_openPackage == null) BindOpenPackageFromCardStore();
-            }
-            if (_cardStore != null && isReady(_cardStore))
-            {
-                readyFlag = true;
-                break;
-            }
-            t += Time.unscaledDeltaTime;
-            yield return null;
-        }
-
-        if (onReadyHandler != null && _cardStore != null)
-        {
-            try { _cardStore.OnCardsReady -= onReadyHandler; } catch { }
-        }
-
-        if (_playerDataManager == null && PlayerDataManager.Instance != null) _playerDataManager = PlayerDataManager.Instance;
-
-        BuildDeckFromPlayerData();
-        yield break;
-    }
-
-    private void OnPlayerDataLoaded()
-    {
-        ClearDeckPanel();
-        BuildDeckFromPlayerData();
-    }
-
-    private void OnPlayerDeckChanged(int cardId, int newCount)
-    {
-        ClearDeckPanel();
-        BuildDeckFromPlayerData();
-    }
-
-    void BuildDeckFromPlayerData()
-    {
-        var deckCounts = new Dictionary<int, int>();
-
-        if (_playerDataManager == null && PlayerDataManager.Instance != null) _playerDataManager = PlayerDataManager.Instance;
-        if (_playerDataManager != null)
-        {
-            try
-            {
-                if (_playerDataManager.playerDeckDict != null && _playerDataManager.playerDeckDict.Count > 0)
-                {
-                    foreach (var kv in _playerDataManager.playerDeckDict)
-                        if (kv.Value > 0) deckCounts[kv.Key] = kv.Value;
+                    var val = field.GetValue(cardStore);
+                    cardListEnum = val as IEnumerable<object>;
                 }
                 else
                 {
-                    if (_playerDataManager.playerDeck != null && _playerDataManager.playerDeck.Length > 0)
-                    {
-                        for (int i = 0; i < _playerDataManager.playerDeck.Length; i++)
-                            if (_playerDataManager.playerDeck[i] > 0) deckCounts[i] = _playerDataManager.playerDeck[i];
-                    }
-                }
-            }
-            catch { }
-        }
-
-        if (deckCounts.Count == 0)
-        {
-            if (_playerDataManager != null)
-            {
-                try
-                {
-                    var pd = _playerDataManager;
-                    var prop = pd.GetType().GetProperty("playerDeckDict") ?? pd.GetType().GetProperty("PlayerDeckDict");
+                    var prop = csType.GetProperty("cardList", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic)
+                               ?? csType.GetProperty("CardList", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
                     if (prop != null)
                     {
-                        var dictObj = prop.GetValue(pd) as System.Collections.IDictionary;
-                        if (dictObj != null)
-                        {
-                            foreach (var k in dictObj.Keys)
-                            {
-                                int id = Convert.ToInt32(k);
-                                int cnt = Convert.ToInt32(dictObj[k]);
-                                if (cnt > 0) deckCounts[id] = cnt;
-                            }
-                        }
-                    }
-
-                    if (deckCounts.Count == 0)
-                    {
-                        var f = pd.GetType().GetField("playerDeck") ?? pd.GetType().GetField("PlayerDeck");
-                        if (f != null)
-                        {
-                            var arr = f.GetValue(pd) as int[];
-                            if (arr != null)
-                            {
-                                for (int i = 0; i < arr.Length; i++)
-                                    if (arr[i] > 0) deckCounts[i] = arr[i];
-                            }
-                        }
-                    }
-
-                    if (deckCounts.Count == 0)
-                    {
-                        var m = pd.GetType().GetMethod("GetPlayerDeckCounts");
-                        if (m != null)
-                        {
-                            var res = m.Invoke(pd, null) as System.Collections.IDictionary;
-                            if (res != null)
-                            {
-                                foreach (var k in res.Keys)
-                                {
-                                    int id = Convert.ToInt32(k);
-                                    int cnt = Convert.ToInt32(res[k]);
-                                    if (cnt > 0) deckCounts[id] = cnt;
-                                }
-                            }
-                        }
+                        var val = prop.GetValue(cardStore);
+                        cardListEnum = val as IEnumerable<object>;
                     }
                 }
-                catch { }
+
+                if (cardListEnum != null)
+                {
+                    int idx = 0;
+                    foreach (var cdef in cardListEnum)
+                    {
+                        if (cdef == null) { idx++; continue; }
+                        try
+                        {
+                            var t = cdef.GetType();
+                            var pid = t.GetProperty("id") ?? t.GetProperty("Id") ?? t.GetProperty("cardId") ?? t.GetProperty("CardId");
+                            int id = -1;
+                            if (pid != null) id = Convert.ToInt32(pid.GetValue(cdef));
+                            else
+                            {
+                                var fid = t.GetField("id") ?? t.GetField("Id") ?? t.GetField("cardId") ?? t.GetField("CardId");
+                                if (fid != null) id = Convert.ToInt32(fid.GetValue(cdef));
+                            }
+                            if (id >= 0 && !indexMap.ContainsKey(id)) indexMap[id] = idx;
+                        }
+                        catch { }
+                        idx++;
+                    }
+                }
             }
-        }
 
-        if (deckCounts.Count == 0 && playerDataCsv != null)
+            ordered = deckDict.OrderBy(kv =>
+            {
+                if (indexMap.TryGetValue(kv.Key, out int i)) return i;
+                // unknown ids go after known ones, but keep stable order by id
+                return int.MaxValue - kv.Key;
+            }).ToList();
+        }
+        catch
         {
-            deckCounts = ParsePlayerDataCsv(playerDataCsv.text);
+            ordered = deckDict.OrderBy(kv => kv.Key).ToList();
         }
 
-        if (deckCounts.Count == 0) return;
-
+        // 遍历并实例化 UI
         int created = 0;
-        foreach (var kv in deckCounts)
+        foreach (var kv in ordered)
         {
             int cardId = kv.Key;
             int cnt = kv.Value;
             if (cnt <= 0) continue;
 
-            CardMessage def = null;
-            if (_cardStore != null)
-            {
-                try { def = _cardStore.GetCardById(cardId); } catch { def = null; }
-            }
-
-            if (def == null) continue;
-
-            for (int i = 0; i < cnt; i++)
-            {
-                if (TryInstantiateCard(def, 1, cardId)) created++;
-            }
-        }
-    }
-
-    bool TryInstantiateCard(CardMessage def, int count, int cardId)
-    {
-        if (def == null) return false;
-
-        Transform parent = deckPanel;
-        GameObject wrapper = null;
-        if (deckEntryPrefab != null)
-        {
-            wrapper = Instantiate(deckEntryPrefab, deckPanel, false);
-            parent = wrapper.transform;
-        }
-
-        if (_openPackage != null)
-        {
-            try
-            {
-                var go = _openPackage.InstantiateCardItem(def, parent, count, true);
-                if (go != null)
-                {
-                    if (wrapper != null && go.transform.parent != parent)
-                        go.transform.SetParent(parent, false);
-
-                    PostProcessDeckInstance(go, cardId);
-                    return true;
-                }
-            }
-            catch (MissingMethodException) { }
-            catch { }
-
-            try
-            {
-                var mi = _open_package_reflection_method();
-                if (mi != null)
-                {
-                    var ps = mi.GetParameters();
-                    object[] args = BuildArgsForMethod(ps, def, parent, count, true);
-                    var res = mi.Invoke(_openPackage, args) as GameObject;
-                    if (res != null)
-                    {
-                        if (wrapper != null && res.transform.parent != parent)
-                            res.transform.SetParent(parent, false);
-
-                        PostProcessDeckInstance(res, cardId);
-                        return true;
-                    }
-                }
-            }
-            catch { }
-        }
-
-        if (_cardStore != null)
-        {
-            try
-            {
-                MethodInfo mi = GetCardStoreInstantiateMethod("InstantiateCardItem");
-                if (mi != null)
-                {
-                    var ps = mi.GetParameters();
-                    object[] args = BuildArgsForMethod(ps, def, parent, count, true);
-                    var res = mi.Invoke(_cardStore, args) as GameObject;
-                    if (res != null)
-                    {
-                        if (wrapper != null && res.transform.parent != parent)
-                            res.transform.SetParent(parent, false);
-
-                        PostProcessDeckInstance(res, cardId);
-                        return true;
-                    }
-                }
-            }
-            catch { }
-        }
-
-        try
-        {
-            var opType = _open_package_reflection_type();
-            if (opType != null)
-            {
-                var monsterField = opType.GetField("monsterPrefabs", BindingFlags.Public | BindingFlags.Instance);
-                var spellField = opType.GetField("spellPrefab", BindingFlags.Public | BindingFlags.Instance);
-                if (monsterField != null && def is MonsterCard)
-                {
-                    var listObj = monsterField.GetValue(_openPackage) as IList;
-                    GameObject prefab = null;
-                    if (listObj != null && listObj.Count > 0)
-                        prefab = listObj[Math.Abs(def.Card_ID) % listObj.Count] as GameObject;
-                    if (prefab != null)
-                    {
-                        var go = Instantiate(prefab, parent, false);
-                        PostProcessDeckInstance(go, cardId);
-                        return true;
-                    }
-                }
-                else if (spellField != null && def is SpellCard)
-                {
-                    var prefab = spellField.GetValue(_openPackage) as GameObject;
-                    if (prefab != null)
-                    {
-                        var go = Instantiate(prefab, parent, false);
-                        PostProcessDeckInstance(go, cardId);
-                        return true;
-                    }
-                }
-            }
-        }
-        catch { }
-
-        return false;
-    }
-
-    // New: instantiate and return the created GameObject (or null)
-    GameObject InstantiateDeckEntry(CardMessage def, int count, int cardId, int siblingIndex = -1)
-    {
-        if (def == null) return null;
-
-        Transform parent = deckPanel;
-        GameObject wrapper = null;
-        if (deckEntryPrefab != null)
-        {
-            wrapper = Instantiate(deckEntryPrefab, deckPanel, false);
-            parent = wrapper.transform;
-        }
-
-        GameObject created = null;
-
-        if (_openPackage != null)
-        {
-            try
-            {
-                var go = _openPackage.InstantiateCardItem(def, parent, count, true);
-                if (go != null)
-                {
-                    if (wrapper != null && go.transform.parent != parent)
-                        go.transform.SetParent(parent, false);
-
-                    created = go;
-                }
-            }
-            catch { }
-            if (created == null)
-            {
-                try
-                {
-                    var mi = _open_package_reflection_method();
-                    if (mi != null)
-                    {
-                        var ps = mi.GetParameters();
-                        object[] args = BuildArgsForMethod(ps, def, parent, count, true);
-                        var res = mi.Invoke(_openPackage, args) as GameObject;
-                        if (res != null)
-                        {
-                            if (wrapper != null && res.transform.parent != parent)
-                                res.transform.SetParent(parent, false);
-                            created = res;
-                        }
-                    }
-                }
-                catch { }
-            }
-        }
-
-        if (created == null && _cardStore != null)
-        {
-            try
-            {
-                MethodInfo mi = GetCardStoreInstantiateMethod("InstantiateCardItem");
-                if (mi != null)
-                {
-                    var ps = mi.GetParameters();
-                    object[] args = BuildArgsForMethod(ps, def, parent, count, true);
-                    var res = mi.Invoke(_cardStore, args) as GameObject;
-                    if (res != null)
-                    {
-                        if (wrapper != null && res.transform.parent != parent)
-                            res.transform.SetParent(parent, false);
-                        created = res;
-                    }
-                }
-            }
-            catch { }
-        }
-
-        if (created == null)
-        {
-            try
-            {
-                var opType = _open_package_reflection_type();
-                if (opType != null)
-                {
-                    var monsterField = opType.GetField("monsterPrefabs", BindingFlags.Public | BindingFlags.Instance);
-                    var spellField = opType.GetField("spellPrefab", BindingFlags.Public | BindingFlags.Instance);
-                    if (monsterField != null && def is MonsterCard)
-                    {
-                        var listObj = monsterField.GetValue(_openPackage) as IList;
-                        GameObject prefab = null;
-                        if (listObj != null && listObj.Count > 0)
-                            prefab = listObj[Math.Abs(def.Card_ID) % listObj.Count] as GameObject;
-                        if (prefab != null)
-                        {
-                            var go = Instantiate(prefab, parent, false);
-                            created = go;
-                        }
-                    }
-                    else if (spellField != null && def is SpellCard)
-                    {
-                        var prefab = spellField.GetValue(_openPackage) as GameObject;
-                        if (prefab != null)
-                        {
-                            var go = Instantiate(prefab, parent, false);
-                            created = go;
-                        }
-                    }
-                }
-            }
-            catch { }
-        }
-
-        if (created != null)
-        {
-            try { PostProcessDeckInstance(created, cardId); } catch { }
-            // place wrapper or created at sibling index
-            if (siblingIndex >= 0)
-            {
-                // if wrapper exists, set wrapper's sibling; else set created's sibling
-                if (wrapper != null)
-                {
-                    wrapper.transform.SetSiblingIndex(Mathf.Clamp(siblingIndex, 0, deckPanel.childCount - 1));
-                }
-                else
-                {
-                    created.transform.SetParent(deckPanel, true);
-                    created.transform.SetSiblingIndex(Mathf.Clamp(siblingIndex, 0, deckPanel.childCount - 1));
-                }
-            }
-            return created;
-        }
-
-        return null;
-    }
-
-    private MethodInfo _open_package_reflection_method()
-    {
-        try { return _openPackage?.GetType().GetMethod("InstantiateCardItem", BindingFlags.Public | BindingFlags.Instance); } catch { return null; }
-    }
-    private Type _open_package_reflection_type()
-    {
-        try { return _openPackage?.GetType(); } catch { return null; }
-    }
-
-    void PostProcessDeckInstance(GameObject go, int cardId)
-    {
-        if (go == null) return;
-
-        try { librarySource?.ClearPrefabArtPublic(go); } catch { }
-
-        try { librarySource?.ApplyCardArtToInstance(go, cardId, true); } catch { }
-
-        string stackDesc = GetStackDescriptionForCard(cardId);
-        if (string.IsNullOrEmpty(stackDesc)) stackDesc = "叠放数: 1";
-
-        bool forced = false;
-        try
-        {
             object defObj = null;
-            try { defObj = _cardStore != null ? _cardStore.GetCardById(cardId) : null; } catch { defObj = null; }
-
-            forced = ForceApplyStackToDisplayComponents(go, defObj, stackDesc);
-        }
-        catch { }
-
-        try
-        {
-            if (!forced)
-            {
-                if (!InstanceHasExistingStackText(go))
-                {
-                    ApplyStackDescriptionToInstance(go, cardId, stackDesc);
-                }
-            }
-        }
-        catch { }
-
-        if (hideCardInfoInDeck)
-        {
+            // 尝试通过 CardStore.GetCardById 获取定义（若可用）
             try
             {
-                var counters = go.GetComponentsInChildren<CardCounter>(true);
-                foreach (var c in counters)
+                if (cardStore != null)
                 {
-                    if (c == null || c.gameObject == null) continue;
-                    var nm = c.gameObject.name.ToLowerInvariant();
-                    if (nm.Contains("stack") || nm.Contains("叠放") || nm.Contains("数量")) continue;
-                    c.gameObject.SetActive(false);
-                }
-            }
-            catch { }
-        }
-    }
-
-    string GetStackDescriptionForCard(int cardId)
-    {
-        try
-        {
-            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                var ctsType = asm.GetType("CardTextStore") ?? asm.GetType("CardTexts") ?? asm.GetType("CardTextManager");
-                if (ctsType == null) continue;
-
-                UnityEngine.Object instance = null;
-                try { instance = FindObjectOfType(ctsType); } catch { instance = null; }
-
-                if (instance != null)
-                {
-                    var mi = ctsType.GetMethod("GetStackDescription", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-                          ?? ctsType.GetMethod("GetStack", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-                          ?? ctsType.GetMethod("GetCardText", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-                          ?? ctsType.GetMethod("GetText", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-                          ?? ctsType.GetMethod("Get", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-
-                    if (mi != null)
+                    var csType = cardStore.GetType();
+                    var gm = csType.GetMethod("GetCardById", BindingFlags.Public | BindingFlags.Instance)
+                             ?? csType.GetMethod("GetCard", BindingFlags.Public | BindingFlags.Instance);
+                    if (gm != null)
                     {
+                        defObj = gm.Invoke(cardStore, new object[] { cardId });
+                    }
+                    else
+                    {
+                        // 尝试直接在 cardList 中查找
                         try
                         {
-                            var res = mi.Invoke(instance, new object[] { cardId });
-                            if (res is string s && !string.IsNullOrEmpty(s)) return s;
-                        }
-                        catch { }
-                    }
-
-                    try
-                    {
-                        var prop = ctsType.GetProperty("cardTexts", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-                                ?? ctsType.GetProperty("texts", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                        if (prop != null)
-                        {
-                            var dict = prop.GetValue(instance) as System.Collections.IDictionary;
-                            if (dict != null && dict.Contains(cardId))
+                            var field = csType.GetField("cardList", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic)
+                                     ?? csType.GetField("CardList", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
+                            if (field != null)
                             {
-                                var val = dict[cardId] as string;
-                                if (!string.IsNullOrEmpty(val)) return val;
-                            }
-                        }
-                    }
-                    catch { }
-                }
-            }
-        }
-        catch { }
-
-        try
-        {
-            if (_cardStore != null)
-            {
-                var def = _cardStore.GetCardById(cardId);
-                if (def != null)
-                {
-                    var t = def.GetType();
-                    string[] candidateNames = new[] {
-                "StackDescription","stackDescription","StackDesc","stackDesc",
-                "StackText","stackText","Stack","stack","StackInfo","stackInfo",
-                "PileDescription","PileDesc","Description","desc"
-            };
-                    foreach (var n in candidateNames)
-                    {
-                        try
-                        {
-                            var p = t.GetProperty(n, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                            if (p != null && p.PropertyType == typeof(string))
-                            {
-                                var v = p.GetValue(def) as string;
-                                if (!string.IsNullOrEmpty(v)) return v;
-                            }
-                        }
-                        catch { }
-                        try
-                        {
-                            var f = t.GetField(n, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                            if (f != null && f.FieldType == typeof(string))
-                            {
-                                var v2 = f.GetValue(def) as string;
-                                if (!string.IsNullOrEmpty(v2)) return v2;
-                            }
-                        }
-                        catch { }
-                    }
-                }
-            }
-        }
-        catch { }
-
-        return null;
-    }
-
-    bool ForceApplyStackToDisplayComponents(GameObject go, object defObj, string stackDesc)
-    {
-        if (go == null) return false;
-        bool applied = false;
-
-        var monos = go.GetComponentsInChildren<MonoBehaviour>(true);
-        foreach (var m in monos)
-        {
-            if (m == null) continue;
-            var t = m.GetType();
-            var tn = t.Name.ToLowerInvariant();
-
-            if (tn.Contains("spellcarddisplay") || tn.Contains("monstercarddisplay") || tn.Contains("carddisplay") || tn.Contains("cardinfodisplay"))
-            {
-                try
-                {
-                    var methods = t.GetMethods(BindingFlags.Public | BindingFlags.Instance);
-                    MethodInfo setCardWithString = null;
-                    MethodInfo setCardSingle = null;
-                    foreach (var mm in methods)
-                    {
-                        if (string.Equals(mm.Name, "SetCard", StringComparison.OrdinalIgnoreCase))
-                        {
-                            var ps = mm.GetParameters();
-                            if (ps.Length == 2 && (ps[1].ParameterType == typeof(string) || ps[1].ParameterType == typeof(object)))
-                            {
-                                setCardWithString = mm; break;
-                            }
-                            if (ps.Length == 1) setCardSingle = mm;
-                        }
-                    }
-                    if (setCardWithString != null)
-                    {
-                        var ps = setCardWithString.GetParameters();
-                        object p0 = null;
-                        if (defObj != null && ps.Length >= 1 && ps[0].ParameterType.IsAssignableFrom(defObj.GetType()))
-                            p0 = defObj;
-                        else if (ps.Length >= 1 && ps[0].ParameterType == typeof(int))
-                        {
-                            try
-                            {
-                                var idProp = defObj?.GetType().GetProperty("Card_ID") ?? defObj?.GetType().GetProperty("CardId");
-                                if (idProp != null) p0 = idProp.GetValue(defObj);
-                            }
-                            catch { p0 = null; }
-                        }
-                        try
-                        {
-                            setCardWithString.Invoke(m, new object[] { p0, stackDesc });
-                            applied = true;
-                            if (applied) return true;
-                        }
-                        catch { }
-                    }
-
-                    var setStackMethod = t.GetMethod("SetStackDescription", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-                                       ?? t.GetMethod("SetStackText", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-                                       ?? t.GetMethod("SetStack", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-                                       ?? t.GetMethod("SetCount", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-                                       ?? t.GetMethod("SetText", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                    if (setStackMethod != null)
-                    {
-                        var ps2 = setStackMethod.GetParameters();
-                        if (ps2.Length == 1 && ps2[0].ParameterType == typeof(string))
-                        {
-                            try
-                            {
-                                setStackMethod.Invoke(m, new object[] { stackDesc });
-                                applied = true;
-                                if (applied) return true;
-                            }
-                            catch { }
-                        }
-                    }
-
-                    string[] fieldCandidates = new[] { "stackText", "countText", "text", "stack", "count", "stackDesc", "stackDescription" };
-                    foreach (var fn in fieldCandidates)
-                    {
-                        try
-                        {
-                            var fld = t.GetField(fn, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                            if (fld != null)
-                            {
-                                var val = fld.GetValue(m);
-                                if (val is Text uiText)
+                                var listObj = field.GetValue(cardStore) as System.Collections.IEnumerable;
+                                if (listObj != null)
                                 {
-                                    uiText.text = stackDesc;
-                                    applied = true; return true;
-                                }
-                                var tmpType = GetTMPTextType();
-                                if (tmpType != null && val != null && tmpType.IsAssignableFrom(val.GetType()))
-                                {
-                                    var textProp = tmpType.GetProperty("text", BindingFlags.Public | BindingFlags.Instance);
-                                    if (textProp != null)
+                                    foreach (var item in listObj)
                                     {
-                                        textProp.SetValue(val, stackDesc);
-                                        applied = true; return true;
+                                        int id = -1;
+                                        var t = item.GetType();
+                                        var pid = t.GetProperty("id") ?? t.GetProperty("Id") ?? t.GetProperty("cardId");
+                                        if (pid != null) id = Convert.ToInt32(pid.GetValue(item));
+                                        else
+                                        {
+                                            var fid = t.GetField("id") ?? t.GetField("Id") ?? t.GetField("cardId");
+                                            if (fid != null) id = Convert.ToInt32(fid.GetValue(item));
+                                        }
+                                        if (id == cardId) { defObj = item; break; }
                                     }
                                 }
-                                if (fld.FieldType == typeof(string))
-                                {
-                                    fld.SetValue(m, stackDesc);
-                                    applied = true; return true;
-                                }
                             }
                         }
                         catch { }
                     }
                 }
-                catch { }
+            }
+            catch { defObj = null; }
+
+            GameObject instance = TryInstantiateViaCardStoreOrOpenPackage(defObj, cnt, attachInfo);
+            if (instance == null)
+            {
+                instance = CreateFallbackTextItem(defObj, cardId, cnt);
             }
 
-            try
+            if (instance != null)
             {
-                var genericSet = t.GetMethod("SetStackDescription", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-                              ?? t.GetMethod("SetStack", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-                              ?? t.GetMethod("SetStackText", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-                              ?? t.GetMethod("SetText", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                if (genericSet != null)
-                {
-                    var ps = genericSet.GetParameters();
-                    if (ps.Length == 1 && ps[0].ParameterType == typeof(string))
-                    {
-                        try
-                        {
-                            genericSet.Invoke(m, new object[] { stackDesc });
-                            applied = true; return true;
-                        }
-                        catch { }
-                    }
-                }
+                instance.transform.SetParent(contentParent, false);
+
+                // 双保险：实例化后立刻尝试隐藏“信息面板”相关子对象（但保留装饰）
+                HideCardInfo(instance);
+
+                created++;
             }
-            catch { }
         }
 
-        try
-        {
-            var texts = go.GetComponentsInChildren<Text>(true);
-            foreach (var t in texts)
-            {
-                if (t == null) continue;
-                var nm = t.gameObject.name.ToLower();
-                if (nm.Contains("stack") || nm.Contains("count") || nm.Contains("叠放") || nm.Contains("数量"))
-                {
-                    t.text = stackDesc; return true;
-                }
-            }
-
-            var tmpType = GetTMPTextType();
-            if (tmpType != null)
-            {
-                var comps = go.GetComponentsInChildren<Component>(true);
-                foreach (var comp in comps)
-                {
-                    if (comp == null) continue;
-                    var ct = comp.GetType();
-                    if (tmpType.IsAssignableFrom(ct))
-                    {
-                        var nm = comp.gameObject.name.ToLowerInvariant();
-                        if (nm.Contains("stack") || nm.Contains("count") || nm.Contains("叠放") || nm.Contains("数量"))
-                        {
-                            var prop = tmpType.GetProperty("text", BindingFlags.Public | BindingFlags.Instance);
-                            if (prop != null)
-                            {
-                                prop.SetValue(comp, stackDesc);
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        catch { }
-
-        return applied;
+        DebugLog($"DeckManager: 刷新完成，创建项={created}");
     }
 
-    Type GetTMPTextType()
+    void ClearSlots()
     {
-        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+        if (contentParent == null) return;
+        for (int i = contentParent.childCount - 1; i >= 0; i--)
         {
-            var t = asm.GetType("TMPro.TMP_Text");
-            if (t != null) return t;
+            var c = contentParent.GetChild(i);
+            if (Application.isPlaying) Destroy(c.gameObject); else DestroyImmediate(c.gameObject);
         }
+    }
+
+    // ========== Instantiate helpers ==========
+    GameObject TryInstantiateViaCardStoreOrOpenPackage(object defObj, int count, bool attachInfoFlag)
+    {
+        // try CardStore.InstantiateCardItem
+        if (cardStore != null)
+        {
+            MethodInfo mi = cardStore.GetType().GetMethod("InstantiateCardItem", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (mi != null)
+            {
+                try
+                {
+                    var args = BuildArgsForMethod(mi.GetParameters(), defObj, contentParent, count, attachInfoFlag);
+                    var res = mi.Invoke(cardStore, args) as GameObject;
+                    if (res != null) return res;
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"DeckManager: CardStore.InstantiateCardItem 调用失败: {ex.Message}");
+                }
+            }
+        }
+
+        // try OpenPackage attached on CardStore (按类型名查找)
+        if (cardStore != null)
+        {
+            var opComp = FindComponentOn(cardStore.gameObject, "OpenPackage");
+            if (opComp != null)
+            {
+                var mi = opComp.GetType().GetMethod("InstantiateCardItem", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                if (mi != null)
+                {
+                    try
+                    {
+                        var args = BuildArgsForMethod(mi.GetParameters(), defObj, contentParent, count, attachInfoFlag);
+                        var res = mi.Invoke(opComp, args) as GameObject;
+                        if (res != null) return res;
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning($"DeckManager: OpenPackage (from CardStore) InstantiateCardItem 调用失败: {ex.Message}");
+                    }
+                }
+            }
+        }
+
+        // try global OpenPackage (搜索全局对象)
+        var openPkg = FindComponentByTypeName("OpenPackage");
+        if (openPkg != null)
+        {
+            var mi = openPkg.GetType().GetMethod("InstantiateCardItem", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (mi != null)
+            {
+                try
+                {
+                    var args = BuildArgsForMethod(mi.GetParameters(), defObj, contentParent, count, attachInfoFlag);
+                    var res = mi.Invoke(openPkg, args) as GameObject;
+                    if (res != null) return res;
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"DeckManager: 全局 OpenPackage.InstantiateCardItem 调用失败: {ex.Message}");
+                }
+            }
+        }
+
         return null;
     }
 
-    bool InstanceHasExistingStackText(GameObject go)
-    {
-        if (go == null) return false;
-
-        try
-        {
-            var texts = go.GetComponentsInChildren<Text>(true);
-            foreach (var t in texts)
-            {
-                if (t == null) continue;
-                var nm = t.gameObject.name.ToLowerInvariant();
-                if (nm.Contains("stack") || nm.Contains("count") || nm.Contains("叠放") || nm.Contains("数量"))
-                {
-                    if (!string.IsNullOrWhiteSpace(t.text)) return true;
-                }
-            }
-            foreach (var t in texts)
-            {
-                if (t == null) continue;
-                if (!string.IsNullOrWhiteSpace(t.text)) return true;
-            }
-        }
-        catch { }
-
-        try
-        {
-            Type tmpTextType = GetTMPTextType();
-            PropertyInfo tmpProp = null;
-            if (tmpTextType != null) tmpProp = tmpTextType.GetProperty("text", BindingFlags.Public | BindingFlags.Instance);
-
-            if (tmpTextType != null && tmpProp != null)
-            {
-                var comps = go.GetComponentsInChildren<Component>(true);
-                foreach (var comp in comps)
-                {
-                    if (comp == null) continue;
-                    var ct = comp.GetType();
-                    if (tmpTextType.IsAssignableFrom(ct))
-                    {
-                        var nm = comp.gameObject.name.ToLowerInvariant();
-                        var val = tmpProp.GetValue(comp) as string;
-                        if (nm.Contains("stack") || nm.Contains("count") || nm.Contains("叠放") || nm.Contains("数量"))
-                        {
-                            if (!string.IsNullOrWhiteSpace(val)) return true;
-                        }
-                    }
-                }
-                foreach (var comp in comps)
-                {
-                    if (comp == null) continue;
-                    var ct = comp.GetType();
-                    if (tmpTextType.IsAssignableFrom(ct))
-                    {
-                        var val = tmpProp.GetValue(comp) as string;
-                        if (!string.IsNullOrWhiteSpace(val)) return true;
-                    }
-                }
-            }
-        }
-        catch { }
-
-        return false;
-    }
-
-    bool ApplyStackDescriptionToInstance(GameObject go, int cardId, string stackDesc)
-    {
-        if (go == null || string.IsNullOrEmpty(stackDesc)) return false;
-        bool written = false;
-
-        Type tmpTextType = GetTMPTextType();
-        PropertyInfo tmpTextProp = null;
-        if (tmpTextType != null) tmpTextProp = tmpTextType.GetProperty("text", BindingFlags.Public | BindingFlags.Instance);
-
-        var monos = go.GetComponentsInChildren<MonoBehaviour>(true);
-        foreach (var m in monos)
-        {
-            if (m == null) continue;
-            var t = m.GetType();
-
-            string[] fieldCandidates = new[] { "stackText", "countText", "text", "stack", "count", "stackDesc", "stackDescription" };
-            foreach (var fn in fieldCandidates)
-            {
-                try
-                {
-                    var fld = t.GetField(fn, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                    if (fld != null)
-                    {
-                        var val = fld.GetValue(m);
-                        if (val is Text uiText)
-                        {
-                            if (string.IsNullOrWhiteSpace(uiText.text)) uiText.text = stackDesc;
-                            written = true; break;
-                        }
-                        if (val != null && tmpTextType != null && tmpTextType.IsAssignableFrom(val.GetType()))
-                        {
-                            try
-                            {
-                                var cur = tmpTextProp?.GetValue(val) as string;
-                                if (string.IsNullOrWhiteSpace(cur)) tmpTextProp?.SetValue(val, stackDesc);
-                                written = true; break;
-                            }
-                            catch { }
-                        }
-                        if (fld.FieldType == typeof(string))
-                        {
-                            try { fld.SetValue(m, stackDesc); written = true; break; } catch { }
-                        }
-                    }
-                }
-                catch { }
-            }
-            if (written) break;
-
-            string[] propCandidates = new[] { "StackDescription", "StackText", "CountText", "Text" };
-            foreach (var pn in propCandidates)
-            {
-                try
-                {
-                    var prop = t.GetProperty(pn, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                    if (prop != null)
-                    {
-                        if (prop.PropertyType == typeof(string))
-                        {
-                            try { prop.SetValue(m, stackDesc); written = true; break; } catch { }
-                        }
-                        else if (tmpTextType != null && prop.PropertyType == tmpTextType)
-                        {
-                            var obj = prop.GetValue(m);
-                            if (obj != null)
-                            {
-                                try
-                                {
-                                    var cur = tmpTextProp?.GetValue(obj) as string;
-                                    if (string.IsNullOrWhiteSpace(cur)) tmpTextProp?.SetValue(obj, stackDesc);
-                                    written = true; break;
-                                }
-                                catch { }
-                            }
-                        }
-                    }
-                }
-                catch { }
-            }
-            if (written) break;
-
-            try
-            {
-                var method = t.GetMethod("SetStackDescription", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-                         ?? t.GetMethod("SetStack", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-                         ?? t.GetMethod("SetCount", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
-                         ?? t.GetMethod("SetText", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                if (method != null)
-                {
-                    try { method.Invoke(m, new object[] { stackDesc }); written = true; break; } catch { }
-                }
-            }
-            catch { }
-            if (written) break;
-        }
-
-        if (written) return true;
-
-        try
-        {
-            var texts = go.GetComponentsInChildren<Text>(true);
-            foreach (var t in texts)
-            {
-                if (t == null) continue;
-                var nm = t.gameObject.name.ToLower();
-                if (nm.Contains("stack") || nm.Contains("count") || nm.Contains("叠放") || nm.Contains("数量"))
-                {
-                    if (string.IsNullOrWhiteSpace(t.text)) t.text = stackDesc;
-                    written = true; break;
-                }
-            }
-            if (written) return true;
-
-            foreach (var t in texts)
-            {
-                if (t == null) continue;
-                if (string.IsNullOrWhiteSpace(t.text))
-                {
-                    t.text = stackDesc; written = true; break;
-                }
-            }
-            if (written) return true;
-        }
-        catch { }
-
-        if (tmpTextType != null && tmpTextProp != null)
-        {
-            try
-            {
-                var comps = go.GetComponentsInChildren<Component>(true);
-                foreach (var comp in comps)
-                {
-                    if (comp == null) continue;
-                    var ct = comp.GetType();
-                    if (tmpTextType.IsAssignableFrom(ct))
-                    {
-                        var nm = comp.gameObject.name.ToLowerInvariant();
-                        if (nm.Contains("stack") || nm.Contains("count") || nm.Contains("叠放") || nm.Contains("数量"))
-                        {
-                            var cur = tmpTextProp.GetValue(comp) as string;
-                            if (string.IsNullOrWhiteSpace(cur)) tmpTextProp.SetValue(comp, stackDesc);
-                            written = true; break;
-                        }
-                    }
-                }
-                if (written) return true;
-
-                foreach (var comp in comps)
-                {
-                    if (comp == null) continue;
-                    var ct = comp.GetType();
-                    if (tmpTextType.IsAssignableFrom(ct))
-                    {
-                        var cur = tmpTextProp.GetValue(comp) as string;
-                        if (string.IsNullOrWhiteSpace(cur))
-                        {
-                            tmpTextProp.SetValue(comp, stackDesc);
-                            written = true; break;
-                        }
-                    }
-                }
-            }
-            catch { }
-        }
-
-        return written;
-    }
-
-    object[] BuildArgsForMethod(ParameterInfo[] ps, CardMessage def, Transform parent, int count, bool attachInfo)
+    // 构建反射参数：对 bool 参数使用传入的 attachInfoFlag（不要一律 false）
+    object[] BuildArgsForMethod(ParameterInfo[] ps, object defObj, Transform parent, int count, bool attachInfoFlag)
     {
         if (ps == null || ps.Length == 0) return new object[0];
         var args = new object[ps.Length];
         for (int i = 0; i < ps.Length; i++)
         {
-            var pType = ps[i].ParameterType;
-            if (typeof(CardMessage).IsAssignableFrom(pType))
-                args[i] = def;
-            else if (typeof(Transform).IsAssignableFrom(pType))
+            var pInfo = ps[i];
+            var pType = pInfo.ParameterType;
+
+            if (defObj != null && pType.IsAssignableFrom(defObj.GetType()))
+            {
+                args[i] = defObj;
+            }
+            else if (typeof(Transform).IsAssignableFrom(pType) || (typeof(UnityEngine.Object).IsAssignableFrom(pType) && pType.Name == "Transform"))
+            {
                 args[i] = parent;
+            }
             else if (pType == typeof(int))
+            {
                 args[i] = count;
+            }
             else if (pType == typeof(bool))
-                args[i] = attachInfo;
+            {
+                // 使用传入的 attachInfoFlag，让调用方决定是否生成附加信息（装饰/信息面板）
+                args[i] = attachInfoFlag;
+            }
             else if (pType == typeof(object))
-                args[i] = def;
+            {
+                args[i] = defObj;
+            }
             else if (pType == typeof(string))
+            {
                 args[i] = null;
+            }
             else
+            {
                 args[i] = null;
+            }
         }
         return args;
     }
 
-    Dictionary<int, int> ParsePlayerDataCsv(string text)
+    // 从指定 GameObject 上按类型名查找组件（用于寻找 OpenPackage 在 cardStore 上）
+    Component FindComponentOn(GameObject go, string typeName)
     {
-        var dict = new Dictionary<int, int>();
-        if (string.IsNullOrEmpty(text)) return dict;
+        if (go == null || string.IsNullOrEmpty(typeName)) return null;
+        foreach (var comp in go.GetComponents<Component>())
+        {
+            if (comp == null) continue;
+            if (comp.GetType().Name.Equals(typeName, StringComparison.OrdinalIgnoreCase))
+                return comp as Component;
+        }
+        return null;
+    }
+
+    // 在全局范围按类型名查找组件实例
+    Component FindComponentByTypeName(string typeName)
+    {
+        if (string.IsNullOrEmpty(typeName)) return null;
+        try
+        {
+            // 先尝试通过加载的程序集找类型
+            Type found = null;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    foreach (var t in asm.GetTypes())
+                    {
+                        if (t != null && string.Equals(t.Name, typeName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            found = t;
+                            break;
+                        }
+                    }
+                }
+                catch { }
+                if (found != null) break;
+            }
+
+            if (found != null)
+            {
+                var obj = UnityEngine.Object.FindObjectOfType(found);
+                return obj as Component;
+            }
+
+            // 降级：遍历所有 MonoBehaviour 实例
+            foreach (var mb in Resources.FindObjectsOfTypeAll<MonoBehaviour>())
+            {
+                if (mb == null) continue;
+                if (mb.GetType().Name.Equals(typeName, StringComparison.OrdinalIgnoreCase))
+                    return mb;
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"DeckManager: FindComponentByTypeName 异常: {ex.Message}");
+        }
+        return null;
+    }
+
+    // ========== Fallback 创建项 ==========
+    GameObject CreateFallbackTextItem(object defObj, int cardId, int count)
+    {
+        var go = new GameObject($"Card_{cardId}");
+        var rt = go.AddComponent<RectTransform>();
+        TextMeshProUGUI tmp = null;
+        try
+        {
+            tmp = go.AddComponent<TextMeshProUGUI>();
+            tmp.fontSize = 18;
+            tmp.color = Color.white;
+            tmp.alignment = TextAlignmentOptions.Center;
+            string nameText = null;
+            try
+            {
+                if (defObj != null)
+                {
+                    var t = defObj.GetType();
+                    var p = t.GetProperty("Card_Name") ?? t.GetProperty("Name") ?? t.GetProperty("cardName") ?? t.GetProperty("card_name");
+                    if (p != null) nameText = p.GetValue(defObj) as string;
+                }
+            }
+            catch { }
+            tmp.text = $"{(nameText ?? ("ID" + cardId))}  ×{count}";
+        }
+        catch
+        {
+            var t = go.AddComponent<Text>();
+            t.text = $"ID{cardId}  ×{count}";
+            t.fontSize = 14;
+            t.color = Color.white;
+        }
+        rt.sizeDelta = new Vector2(300, 40);
+        return go;
+    }
+
+    // ========== HideCardInfo（精确） ==========
+    void HideCardInfo(GameObject instance)
+    {
+        if (instance == null) return;
+
+        // 只隐藏明确的“信息/详情/Tooltip”面板，不触碰装饰性节点（Border/勾玉/CardLv 等）
+        var infoNames = new[] { "卡片信息", "CardInfo", "cardInfo", "InfoPanel", "Card_Detail", "卡片详情", "DetailPanel", "Tooltip", "卡片信息面板" };
+
+        foreach (var t in instance.GetComponentsInChildren<Transform>(true))
+        {
+            if (t == null || t.gameObject == null) continue;
+            var nm = t.name ?? "";
+            foreach (var name in infoNames)
+            {
+                if (nm.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    t.gameObject.SetActive(false);
+                    break;
+                }
+            }
+        }
+
+        // 保险：不要去模糊禁用其他脚本。只确保 CardLv 脚本处于启用状态（如果存在的话）
+        try
+        {
+            foreach (var lv in instance.GetComponentsInChildren<MonoBehaviour>(true))
+            {
+                var t = lv.GetType();
+                if (string.Equals(t.Name, "CardLv", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!lv.enabled) lv.enabled = true;
+                }
+            }
+        }
+        catch { }
+    }
+
+    // ========== Deck 获取逻辑 ==========
+    Dictionary<int, int> GetDeckFromPlayerDataManager()
+    {
+        var result = new Dictionary<int, int>();
+        if (pData == null) return result;
+        try
+        {
+            // 常见属性/字段尝试读取
+            var pdType = pData.GetType();
+
+            // 1) PlayerDeckDict 属性/字段
+            var prop = pdType.GetProperty("PlayerDeckDict", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
+                       ?? pdType.GetProperty("playerDeckDict", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (prop != null)
+            {
+                var dictObj = prop.GetValue(pData) as System.Collections.IDictionary;
+                if (dictObj != null)
+                {
+                    foreach (var k in dictObj.Keys)
+                    {
+                        int id = Convert.ToInt32(k);
+                        int cnt = Convert.ToInt32(dictObj[k]);
+                        if (cnt > 0) result[id] = cnt;
+                    }
+                    if (result.Count > 0) return result;
+                }
+            }
+
+            var field = pdType.GetField("PlayerDeck", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
+                     ?? pdType.GetField("playerDeck", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (field != null)
+            {
+                var arr = field.GetValue(pData) as int[];
+                if (arr != null)
+                {
+                    for (int i = 0; i < arr.Length; i++)
+                        if (arr[i] > 0) result[i] = arr[i];
+                    if (result.Count > 0) return result;
+                }
+            }
+
+            // 2) 常见方法尝试
+            var methodsToTry = new string[] { "GetPlayerDeck", "GetPlayerCardCounts", "GetDeckDict", "GetDeck" };
+            foreach (var mname in methodsToTry)
+            {
+                var m = pdType.GetMethod(mname, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                if (m != null)
+                {
+                    var res = m.Invoke(pData, null);
+                    if (res is System.Collections.IDictionary dictRes)
+                    {
+                        foreach (var k in dictRes.Keys)
+                        {
+                            int id = Convert.ToInt32(k);
+                            int cnt = Convert.ToInt32(dictRes[k]);
+                            if (cnt > 0) result[id] = cnt;
+                        }
+                        if (result.Count > 0) return result;
+                    }
+                    else if (res is int[] arrRes)
+                    {
+                        for (int i = 0; i < arrRes.Length; i++)
+                            if (arrRes[i] > 0) result[i] = arrRes[i];
+                        if (result.Count > 0) return result;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"DeckManager: GetDeckFromPlayerDataManager 异常: {ex.Message}");
+        }
+        return result;
+    }
+
+    // ========== CSV 解析 ==========
+    Dictionary<int, int> ParsePlayerDataCsvSimple(string text, CsvMergeStrategy mergeStrategy, bool onlyDeckLines = false)
+    {
+        var dictCard = new Dictionary<int, int>();
+        var dictDeck = new Dictionary<int, int>();
+        if (string.IsNullOrEmpty(text)) return new Dictionary<int, int>();
         var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
         foreach (var raw in lines)
         {
@@ -1151,418 +591,46 @@ public class DeckManager : MonoBehaviour, ICardDropTarget
             var parts = line.Split(',');
             if (parts.Length < 3) continue;
             var tag = parts[0].Trim().ToLower();
-            if (tag == "deck")
+            if (onlyDeckLines && tag != "deck") continue;
+            if ((tag == "card" || tag == "deck") && int.TryParse(parts[1].Trim(), out int id) && int.TryParse(parts[2].Trim(), out int cnt))
             {
-                if (int.TryParse(parts[1].Trim(), out int id) && int.TryParse(parts[2].Trim(), out int cnt))
+                if (cnt <= 0) continue;
+                if (tag == "card")
                 {
-                    if (cnt > 0)
-                    {
-                        if (dict.ContainsKey(id)) dict[id] += cnt; else dict[id] = cnt;
-                    }
-                }
-            }
-        }
-        return dict;
-    }
-
-    void ClearDeckPanel()
-    {
-        if (deckPanel == null) return;
-        for (int i = deckPanel.childCount - 1; i >= 0; i--)
-            Destroy(deckPanel.GetChild(i).gameObject);
-    }
-
-    public bool CanAcceptCard(int cardId)
-    {
-        if (_cardStore == null && CardStore.Instance != null) _cardStore = CardStore.Instance;
-        if (_cardStore == null) return false;
-        try
-        {
-            var def = _cardStore.GetCardById(cardId);
-            return def != null;
-        }
-        catch { return false; }
-    }
-
-    public bool AcceptCardById(int cardId)
-    {
-        if (_cardStore == null && CardStore.Instance != null) _cardStore = CardStore.Instance;
-        if (_card_store_null_check()) return false;
-
-        if (_playerDataManager == null && PlayerDataManager.Instance != null) _playerDataManager = PlayerDataManager.Instance;
-        if (_playerDataManager == null) _playerDataManager = FindObjectOfType<PlayerDataManager>();
-
-        if (_playerDataManager == null) return false;
-
-        bool changed = false;
-
-        try
-        {
-            changed = TryInvokePlayerDataTransfer(cardId, 1);
-        }
-        catch { changed = false; }
-
-        if (!changed) return false;
-
-        try { TryUpdateLibraryCount(cardId, -1); } catch { }
-
-        try
-        {
-            ClearDeckPanel();
-            BuildDeckFromPlayerData();
-        }
-        catch { }
-
-        return true;
-    }
-
-    private bool _card_store_null_check()
-    {
-        if (_cardStore == null) return true;
-        return false;
-    }
-
-    bool TryUpdateLibraryCount(int cardId, int delta)
-    {
-        if (librarySource == null) return false;
-
-        Type t = librarySource.GetType();
-        string[] candidateNames = new[] {
-    "TryChangePlayerCount",
-    "ChangePlayerCount",
-    "ModifyPlayerCount",
-    "TryModifyPlayerCount",
-    "AdjustPlayerCount",
-    "SetPlayerCount"
-};
-
-        foreach (var name in candidateNames)
-        {
-            var mi = t.GetMethod(name, BindingFlags.Public | BindingFlags.Instance);
-            if (mi != null)
-            {
-                var ps = mi.GetParameters();
-                if (ps.Length == 2 && ps[0].ParameterType == typeof(int) && ps[1].ParameterType == typeof(int))
-                {
-                    try
-                    {
-                        mi.Invoke(librarySource, new object[] { cardId, delta });
-                        return true;
-                    }
-                    catch { return false; }
-                }
-            }
-        }
-
-        foreach (var mi in t.GetMethods(BindingFlags.Public | BindingFlags.Instance))
-        {
-            var ps = mi.GetParameters();
-            if (ps.Length == 2 && ps[0].ParameterType == typeof(int) && ps[1].ParameterType == typeof(int))
-            {
-                try
-                {
-                    mi.Invoke(librarySource, new object[] { cardId, delta });
-                    return true;
-                }
-                catch { }
-            }
-        }
-
-        string[] otherCandidates = new[] { "UpdateLibraryInstancesForCardId", "RefreshCardCount", "UpdateCardCount" };
-        foreach (var name in otherCandidates)
-        {
-            var mi = t.GetMethod(name, BindingFlags.Public | BindingFlags.Instance);
-            if (mi != null)
-            {
-                var ps = mi.GetParameters();
-                if (ps.Length == 1 && ps[0].ParameterType == typeof(int))
-                {
-                    try
-                    {
-                        mi.Invoke(librarySource, new object[] { cardId });
-                        return true;
-                    }
-                    catch { }
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private bool TryInvokePlayerDataTransfer(int cardId, int amount)
-    {
-        if (_playerDataManager == null) return false;
-        var pdType = _playerDataManager.GetType();
-
-        string[] preferredNames = new[] {
-            "TransferCardFromLibraryToDeck",
-            "TryTransferCardToDeck",
-            "TransferCardToDeck",
-            "TransferCard",
-            "TryTransferCard",
-            "MoveCardToDeck"
-        };
-
-        foreach (var name in preferredNames)
-        {
-            var methods = pdType.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
-            foreach (var mi in methods)
-            {
-                if (!string.Equals(mi.Name, name, StringComparison.OrdinalIgnoreCase)) continue;
-                var ps = mi.GetParameters();
-                object[] args = null;
-
-                if (ps.Length == 3 && ps[0].ParameterType == typeof(int) && ps[1].ParameterType == typeof(int) && ps[2].ParameterType == typeof(bool))
-                {
-                    args = new object[] { cardId, amount, false };
-                }
-                else if (ps.Length == 2 && ps[0].ParameterType == typeof(int) && ps[1].ParameterType == typeof(int))
-                {
-                    args = new object[] { cardId, amount };
-                }
-                else if (ps.Length == 1 && ps[0].ParameterType == typeof(int))
-                {
-                    args = new object[] { cardId };
+                    if (dictCard.ContainsKey(id)) dictCard[id] += cnt; else dictCard[id] = cnt;
                 }
                 else
                 {
-                    continue;
+                    dictDeck[id] = cnt;
                 }
-
-                try
-                {
-                    var res = mi.Invoke(_playerDataManager, args);
-                    if (mi.ReturnType == typeof(bool))
-                    {
-                        return res is bool b && b;
-                    }
-                    else if (mi.ReturnType == typeof(int))
-                    {
-                        return Convert.ToInt32(res) > 0;
-                    }
-                    else if (mi.ReturnType == typeof(void))
-                    {
-                        return true;
-                    }
-                    else
-                    {
-                        if (res != null) return true;
-                    }
-                }
-                catch { continue; }
             }
         }
 
-        var allMethods = pdType.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
-        foreach (var mi in allMethods)
+        var outDict = new Dictionary<int, int>();
+        switch (mergeStrategy)
         {
-            string lname = mi.Name.ToLowerInvariant();
-            if (!lname.Contains("transfer") && !lname.Contains("deck") && !lname.Contains("move")) continue;
-
-            var ps = mi.GetParameters();
-            object[] args = null;
-            if (ps.Length == 3 && ps[0].ParameterType == typeof(int) && ps[1].ParameterType == typeof(int) && ps[2].ParameterType == typeof(bool))
-                args = new object[] { cardId, amount, false };
-            else if (ps.Length == 2 && ps[0].ParameterType == typeof(int) && ps[1].ParameterType == typeof(int))
-                args = new object[] { cardId, amount };
-            else if (ps.Length == 1 && ps[0].ParameterType == typeof(int))
-                args = new object[] { cardId };
-            else
-                continue;
-
-            try
-            {
-                var res = mi.Invoke(_playerDataManager, args);
-                if (mi.ReturnType == typeof(bool))
-                {
-                    return res is bool b && b;
-                }
-                else if (mi.ReturnType == typeof(int))
-                {
-                    return Convert.ToInt32(res) > 0;
-                }
-                else if (mi.ReturnType == typeof(void))
-                {
-                    return true;
-                }
-                else
-                {
-                    if (res != null) return true;
-                }
-            }
-            catch { continue; }
+            case CsvMergeStrategy.PreferDeckThenCard:
+                foreach (var kv in dictDeck) outDict[kv.Key] = kv.Value;
+                foreach (var kv in dictCard) if (!outDict.ContainsKey(kv.Key)) outDict[kv.Key] = kv.Value;
+                break;
+            case CsvMergeStrategy.PreferCardThenDeck:
+                foreach (var kv in dictCard) outDict[kv.Key] = kv.Value;
+                foreach (var kv in dictDeck) if (!outDict.ContainsKey(kv.Key)) outDict[kv.Key] = kv.Value;
+                break;
+            case CsvMergeStrategy.SumBoth:
+                foreach (var kv in dictCard) outDict[kv.Key] = kv.Value;
+                foreach (var kv in dictDeck) if (outDict.ContainsKey(kv.Key)) outDict[kv.Key] += kv.Value; else outDict[kv.Key] = kv.Value;
+                break;
         }
-
-        return false;
+        return outDict;
     }
 
-    public bool CanAccept(CardDragHandler card)
+    void DebugLog(string s)
     {
-        if (card == null) return false;
-        return CanAcceptCard(card.CardId);
-    }
-
-    // Modified Accept: will attempt to compute insert index from pointer position if provided
-    public void Accept(CardDragHandler card, PointerEventData eventData)
-    {
-        if (card == null) return;
-
-        int insertIndex = -1;
-        try
+        if (debugText != null)
         {
-            if (eventData != null && deckPanel != null)
-            {
-                insertIndex = CalculateInsertIndexByNearestChild(deckPanel, eventData.position);
-            }
+            try { debugText.text = s; } catch { }
         }
-        catch { insertIndex = -1; }
-
-        bool ok = false;
-        try
-        {
-            if (insertIndex >= 0)
-                ok = AddCardByIdAt(card.CardId, insertIndex);
-            else
-                ok = AcceptCardById(card.CardId);
-        }
-        catch { ok = false; }
-
-        if (!ok)
-        {
-            // do nothing further
-        }
-    }
-
-    // New public method: try to add card to player data and insert UI entry at index
-    public bool AddCardByIdAt(int cardId, int index)
-    {
-        if (_cardStore == null && CardStore.Instance != null) _cardStore = CardStore.Instance;
-        if (_card_store_null_check()) return false;
-
-        if (_playerDataManager == null && PlayerDataManager.Instance != null) _playerDataManager = PlayerDataManager.Instance;
-        if (_playerDataManager == null) _playerDataManager = FindObjectOfType<PlayerDataManager>();
-
-        if (_playerDataManager == null) return false;
-
-        bool changed = false;
-
-        try
-        {
-            changed = TryInvokePlayerDataTransfer(cardId, 1);
-        }
-        catch { changed = false; }
-
-        if (!changed) return false;
-
-        try { TryUpdateLibraryCount(cardId, -1); } catch { }
-
-        // instantiate UI entry at index without rebuilding entire list
-        try
-        {
-            // find card definition
-            CardMessage def = null;
-            if (_cardStore != null)
-            {
-                try { def = _cardStore.GetCardById(cardId); } catch { def = null; }
-            }
-            if (def == null)
-            {
-                // fallback - still rebuild full deck to reflect data
-                ClearDeckPanel();
-                BuildDeckFromPlayerData();
-                return true;
-            }
-
-            // compute a valid index
-            int childCount = deckPanel != null ? deckPanel.childCount : 0;
-            int idx = Mathf.Clamp(index, 0, childCount);
-
-            // create entry and place at sibling index
-            var go = InstantiateDeckEntry(def, 1, cardId, idx);
-            // if instantiate didn't place wrapper correctly (edge cases), ensure sibling index
-            if (go != null)
-            {
-                // if the created object is not directly child of deckPanel (wrapper used), ensure wrapper index is set already
-                // Force rebuild layout
-                LayoutRebuilder.ForceRebuildLayoutImmediate(deckPanel);
-            }
-            else
-            {
-                // fallback: rebuild full list
-                ClearDeckPanel();
-                BuildDeckFromPlayerData();
-            }
-        }
-        catch
-        {
-            try
-            {
-                ClearDeckPanel();
-                BuildDeckFromPlayerData();
-            }
-            catch { }
-        }
-
-        return true;
-    }
-
-    // Compute index by nearest child (simple distance method); returns 0..childCount (childCount means append)
-    int CalculateInsertIndexByNearestChild(RectTransform content, Vector2 screenPos)
-    {
-        if (content == null) return 0;
-        Canvas rootCanvas = content.GetComponentInParent<Canvas>();
-        Camera cam = rootCanvas != null ? rootCanvas.worldCamera : null;
-
-        if (content.childCount == 0) return 0;
-
-        RectTransformUtility.ScreenPointToLocalPointInRectangle(content, screenPos, cam, out Vector2 localPoint);
-
-        float minDist = float.MaxValue;
-        int nearestIndex = 0;
-        for (int i = 0; i < content.childCount; i++)
-        {
-            RectTransform child = content.GetChild(i) as RectTransform;
-            if (child == null) continue;
-            // compute center position in local coordinates
-            Vector2 childCenter = child.anchoredPosition;
-            float d = Vector2.SqrMagnitude(localPoint - childCenter);
-            if (d < minDist)
-            {
-                minDist = d;
-                nearestIndex = i;
-            }
-        }
-
-        // decide before/after nearest by comparing along primary axis (x for horizontal layout)
-        RectTransform nearest = content.GetChild(nearestIndex) as RectTransform;
-        if (nearest == null) return content.childCount;
-
-        // try to infer layout direction: if content width > height and grid cell wider than tall, prefer horizontal test
-        bool testHorizontal = true;
-        var grid = content.GetComponent<GridLayoutGroup>();
-        if (grid != null)
-        {
-            // if constraint is fixed column or start corner, we can still use x
-            testHorizontal = true;
-        }
-        // insert after nearest if pointer is to its right
-        if (localPoint.x > nearest.anchoredPosition.x) return nearestIndex + 1;
-        else return nearestIndex;
-    }
-
-    private string GetTransformPath(Transform t)
-    {
-        if (t == null) return "(null)";
-        string path = t.name;
-        var p = t.parent;
-        int safety = 0;
-        while (p != null && safety < 128)
-        {
-            path = p.name + "/" + path;
-            p = p.parent;
-            safety++;
-        }
-        return path;
+        Debug.Log(s);
     }
 }

@@ -726,7 +726,6 @@ GameObject:
   - component: {fileID: 5279430581356091803}
   - component: {fileID: 6005951391905680563}
   - component: {fileID: 5606535940468001423}
-  - component: {fileID: 1177382669839376375}
   - component: {fileID: 6710638564687054464}
   m_Layer: 5
   m_Name: "\u6728\u724C"
@@ -833,30 +832,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ZoomUI
   zoomSize: 1.2
---- !u!114 &1177382669839376375
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 4958441132452338078}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 51aa96dde0518174c8e5df3bd53025f4, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CardDragHandler
-  overlayRoot: {fileID: 0}
-  overlayCanvas: {fileID: 0}
-  overlaySortingOrder: 100
-  useAbsoluteDragSize: 1
-  dragSize: {x: 300, y: 300}
-  dragScaleMultiplier: 1.2
-  CardId: -1
-  IsStack: 0
-  StackCount: 0
-  infoRoot: {fileID: 4544729608923280749}
-  infoNodeName: "\u5361\u7247\u4FE1\u606F"
-  isPreview: 0
 --- !u!114 &6710638564687054464
 MonoBehaviour:
   m_ObjectHideFlags: 0

@@ -1,628 +1,359 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using UnityEngine;
-using UnityEngine.SceneManagement;
+using TMPro;
 using UnityEngine.UI;
 
-public class LibraryManage : MonoBehaviour
+public class LibraryManager : MonoBehaviour
 {
-    [Header("CSV Inputs (fallback if no PlayerDataManager)")]
-    public TextAsset playerDataCsv;
-
     [Header("UI")]
-    public RectTransform libraryPanel;
+    public Transform contentParent;                 // ScrollView Content (必填)
+    public TextMeshProUGUI debugText;               // 可选，显示调试信息
 
-    [Header("Attach Info Control (Library decides whether to ask OpenPackage to attach info)")]
-    public bool defaultShowInfo = true;
-    public bool onlyInstantiateInfoInPoolScene = true;
-    public string poolSceneName = "CardPoolScene";
+    [Header("Fallback CSV")]
+    public TextAsset fallbackPlayerDataCsv;
 
-    // 新增：在 Inspector 中可以强制显示 info（用于测试/修复）
-    [Header("Debug / Overrides")]
-    public bool forceAttachInfo = false;
+    [Header("Attach options (when calling InstantiateCardItem)")]
+    public bool attachInfo = true;
 
-    [Header("References (auto-find if null)")]
-    public OpenPackage openPackage;
-    public CardStore cardStore;
-    public PlayerDataManager playerDataManager;
+    [Header("CSV merge strategy")]
+    public CsvMergeStrategy csvMergeStrategy = CsvMergeStrategy.PreferCardThenDeck;
 
-    [Header("Options")]
-    public bool clearOnStart = true;
-
-    // 当前内存中的玩家持有计数（在 BuildLibraryFromPlayerData 中初始化）
-    private Dictionary<int, int> currentPlayerCounts = new Dictionary<int, int>();
-
-    // ---------- 编辑器时也能自动绑定 ----------
-    void OnValidate()
+    public enum CsvMergeStrategy
     {
-        if (cardStore == null)
-        {
-            var cs = FindObjectOfType<CardStore>();
-            if (cs != null) cardStore = cs;
-        }
-
-        if (openPackage == null && cardStore != null)
-        {
-            var op = cardStore.GetComponent<OpenPackage>();
-            if (op != null) openPackage = op;
-        }
-
-        if (playerDataManager == null)
-        {
-            var pd = FindObjectOfType<PlayerDataManager>();
-            if (pd != null) playerDataManager = pd;
-        }
+        PreferDeckThenCard,
+        PreferCardThenDeck,
+        SumBoth
     }
 
-    void Reset()
-    {
-        OnValidate();
-    }
+    [Header("Debug / Test Options")]
+    public bool forceUseCsv = false;      // 强制使用 CSV（忽略 PlayerDataManager）用于调试
+    public bool onlyCardLines = true;     // 解析 CSV 时只解析 tag == "card"（默认 true）
 
-    [ContextMenu("AutoBindReferences")]
-    void AutoBindReferencesContextMenu()
-    {
-        OnValidate();
-        Debug.Log("[LibraryManage] AutoBindReferences executed (OnValidate)。");
-    }
-    // ----------------------------------------
+    [Header("Library display options")]
+    public bool forceShowCardInfo = true; // 卡池需要显示卡片信息面板（运行时强制 SetActive(true)）
+
+    // cached instances
+    CardStore cardStore => CardStore.Instance;
+    PlayerDataManager pData => PlayerDataManager.Instance;
+
+    // 记录最近一次从 CSV 解析得到的行顺序（id -> index）
+    Dictionary<int, int> lastCsvOrderMap = null;
 
     void Start()
     {
-        if (libraryPanel == null)
+        RefreshLibraryUI();
+    }
+
+    // public entry
+    public void RefreshLibraryUI()
+    {
+        if (contentParent == null)
         {
-            Debug.LogError("[LibraryManage] libraryPanel 未绑定！");
+            DebugLog("LibraryManager: contentParent 未绑定");
             return;
         }
 
-        if (cardStore == null && CardStore.Instance != null) cardStore = CardStore.Instance;
-        if (playerDataManager == null && PlayerDataManager.Instance != null) playerDataManager = PlayerDataManager.Instance;
+        ClearSlots();
 
-        if (openPackage == null)
-        {
-            if (cardStore != null)
-                openPackage = cardStore.GetComponent<OpenPackage>();
-        }
-        if (openPackage == null)
-            openPackage = FindObjectOfType<OpenPackage>();
+        Dictionary<int, int> cardDict = null;
+        string usedSource = "none";
 
-        if (clearOnStart) ClearLibrary();
-
-        StartCoroutine(WaitThenBuild());
-    }
-
-    IEnumerator WaitThenBuild()
-    {
-        float timeout = 3f;
-        float t = 0f;
-        bool readyFlag = false;
-        Action onReadyHandler = null;
-
-        Func<CardStore, bool> isReady = (cs) =>
-        {
-            if (cs == null) return true;
-            try
-            {
-                var prop = cs.GetType().GetProperty("IsCardsReady");
-                if (prop != null)
-                {
-                    var val = prop.GetValue(cs);
-                    if (val is bool b) return b;
-                }
-
-                var field = cs.GetType().GetField("cardList", BindingFlags.Public | BindingFlags.Instance);
-                if (field != null)
-                {
-                    var v = field.GetValue(cs) as System.Collections.IEnumerable;
-                    if (v != null)
-                    {
-                        foreach (var _ in v) return true;
-                        return false;
-                    }
-                }
-            }
-            catch { }
-            return true;
-        };
-
-        if (cardStore != null && !isReady(cardStore))
+        // 1) 尝试从 PlayerDataManager 读取（除非强制使用 CSV）
+        if (!forceUseCsv && pData != null)
         {
             try
             {
-                onReadyHandler = new Action(() => { readyFlag = true; });
-                cardStore.OnCardsReady += onReadyHandler;
-            }
-            catch { onReadyHandler = null; }
-        }
-        else
-        {
-            readyFlag = true;
-        }
-
-        while (!readyFlag && t < timeout)
-        {
-            if (cardStore == null && CardStore.Instance != null)
-            {
-                cardStore = CardStore.Instance;
-                if (openPackage == null && cardStore != null)
-                    openPackage = cardStore.GetComponent<OpenPackage>() ?? openPackage;
-            }
-            if (cardStore != null && isReady(cardStore))
-            {
-                readyFlag = true;
-                break;
-            }
-            t += Time.unscaledDeltaTime;
-            yield return null;
-        }
-
-        if (onReadyHandler != null && cardStore != null)
-        {
-            try { cardStore.OnCardsReady -= onReadyHandler; } catch { }
-        }
-
-        if (playerDataManager == null && PlayerDataManager.Instance != null) playerDataManager = PlayerDataManager.Instance;
-
-        BuildLibraryFromPlayerData();
-        yield break;
-    }
-
-    [ContextMenu("RebuildLibrary")]
-    public void RebuildLibrary()
-    {
-        ClearLibrary();
-        BuildLibraryFromPlayerData();
-    }
-
-    void BuildLibraryFromPlayerData()
-    {
-        var playerCounts = new Dictionary<int, int>();
-
-        if (playerDataManager != null)
-        {
-            try
-            {
-                var pd = playerDataManager;
-
-                var prop = pd.GetType().GetProperty("PlayerDeckDict");
-                if (prop != null)
+                var fromPd = GetCardsFromPlayerDataManager();
+                if (fromPd != null && fromPd.Count > 0)
                 {
-                    var dictObj = prop.GetValue(pd) as System.Collections.IDictionary;
-                    if (dictObj != null)
-                    {
-                        foreach (var k in dictObj.Keys)
-                        {
-                            int id = Convert.ToInt32(k);
-                            int cnt = Convert.ToInt32(dictObj[k]);
-                            if (cnt > 0) playerCounts[id] = cnt;
-                        }
-                    }
-                }
-
-                if (playerCounts.Count == 0)
-                {
-                    var f = pd.GetType().GetField("PlayerDeck");
-                    if (f != null)
-                    {
-                        var arr = f.GetValue(pd) as int[];
-                        if (arr != null)
-                        {
-                            for (int i = 0; i < arr.Length; i++)
-                                if (arr[i] > 0) playerCounts[i] = arr[i];
-                        }
-                    }
-                }
-
-                if (playerCounts.Count == 0)
-                {
-                    var m = pd.GetType().GetMethod("GetPlayerCardCounts");
-                    if (m != null)
-                    {
-                        var res = m.Invoke(pd, null) as System.Collections.IDictionary;
-                        if (res != null)
-                        {
-                            foreach (var k in res.Keys)
-                            {
-                                int id = Convert.ToInt32(k);
-                                int cnt = Convert.ToInt32(res[k]);
-                                if (cnt > 0) playerCounts[id] = cnt;
-                            }
-                        }
-                    }
+                    cardDict = fromPd;
+                    usedSource = "PlayerDataManager";
                 }
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[LibraryManage] 从 PlayerDataManager 读取玩家数据时发生异常: {ex.Message}");
+                Debug.LogWarning($"LibraryManager: 读取 PlayerDataManager 时异常: {ex.Message}");
             }
         }
 
-        if (playerCounts.Count == 0 && playerDataCsv != null)
+        // 2) 回退到 CSV（或强制使用 CSV）
+        if ((cardDict == null || cardDict.Count == 0) && fallbackPlayerDataCsv != null)
         {
-            playerCounts = ParsePlayerDataCsvSimple(playerDataCsv.text);
+            try
+            {
+                Dictionary<int, int> csvOrder;
+                cardDict = ParsePlayerDataCsvForCards(fallbackPlayerDataCsv.text, csvMergeStrategy, onlyCardLines, out csvOrder);
+                lastCsvOrderMap = csvOrder;
+                usedSource = "FallbackCSV";
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"LibraryManager: 解析 CSV 时异常: {ex.Message}");
+            }
         }
 
-        try { CardCounter.SetPlayerCounts(playerCounts); } catch { }
-
-        if (playerCounts.Count == 0)
+        if (cardDict == null || cardDict.Count == 0)
         {
-            Debug.LogWarning("[LibraryManage] 未找到玩家持有的卡片数据，Library 为空");
+            DebugLog($"LibraryManager: 未找到 card 数据（source={usedSource}）");
             return;
         }
 
-        // 初始化内存缓存（用于后续增减）
-        currentPlayerCounts = new Dictionary<int, int>(playerCounts);
-
-        if (openPackage == null)
+        // 调试输出读取到的条目
         {
-            if (cardStore != null)
-                openPackage = cardStore.GetComponent<OpenPackage>();
-        }
-        if (openPackage == null)
-            openPackage = FindObjectOfType<OpenPackage>();
-
-        bool attachInfo = ShouldAttachCardInfo();
-
-        // debug：打印场景名、openPackage 状态以及 attachInfo 供排查
-        Debug.Log($"[LibraryManage] Scene='{SceneManager.GetActiveScene().name}', openPackage_present={(openPackage != null)}, attachInfo={attachInfo}, forceAttachInfo={forceAttachInfo}");
-
-        int created = 0;
-        foreach (var kv in playerCounts)
-        {
-            int cardId = kv.Key;
-            int count = kv.Value;
-            if (count <= 0) continue;
-
-            CardMessage def = null;
-            if (cardStore != null)
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"LibraryManager: 使用数据源 = {usedSource}，共 {cardDict.Count} 条");
+            int c = 0;
+            foreach (var kv in cardDict)
             {
-                try { def = cardStore.GetCardById(cardId); }
-                catch { def = null; }
+                sb.AppendLine($"  id={kv.Key} -> count={kv.Value}");
+                if (++c > 50) { sb.AppendLine("  ..."); break; }
             }
-
-            if (def == null)
-            {
-                Debug.LogWarning($"[LibraryManage] CardStore 中未找到 cardId={cardId} 的定义，跳过");
-                continue;
-            }
-
-            bool instantiated = false;
-
-            if (openPackage != null)
-            {
-                try
-                {
-                    // 直接调用（若实现了带 attachInfo 的签名）
-                    var inst = openPackage.InstantiateCardItem(def, libraryPanel, count, attachInfo);
-                    if (inst != null) { created++; instantiated = true; }
-                }
-                catch (MissingMethodException)
-                {
-                    instantiated = false;
-                }
-                catch (TargetParameterCountException)
-                {
-                    instantiated = false;
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning($"[LibraryManage] 调用 OpenPackage.InstantiateCardItem 出错: {ex.Message}");
-                    instantiated = false;
-                }
-
-                if (!instantiated)
-                {
-                    // reflection fallback: attempt to find suitable overload and pass args (incl. attachInfo when possible)
-                    try
-                    {
-                        MethodInfo mi = openPackage.GetType().GetMethod("InstantiateCardItem", BindingFlags.Public | BindingFlags.Instance);
-                        if (mi != null)
-                        {
-                            var ps = mi.GetParameters();
-                            object[] args = BuildArgsForMethod(ps, def, libraryPanel, count, attachInfo);
-                            var res = mi.Invoke(openPackage, args) as GameObject;
-                            if (res != null) { created++; instantiated = true; }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.LogWarning($"[LibraryManage] 反射调用 OpenPackage.InstantiateCardItem 失败: {ex.Message}");
-                    }
-                }
-            }
-
-            if (!instantiated && cardStore != null)
-            {
-                try
-                {
-                    MethodInfo miStore = cardStore.GetType().GetMethod("InstantiateCardItem", BindingFlags.Public | BindingFlags.Instance);
-                    if (miStore != null)
-                    {
-                        var ps = miStore.GetParameters();
-                        object[] args = BuildArgsForMethod(ps, def, libraryPanel, count, attachInfo);
-                        var res = miStore.Invoke(cardStore, args) as GameObject;
-                        if (res != null) { created++; instantiated = true; }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning($"[LibraryManage] 反射调用 CardStore.InstantiateCardItem 失败: {ex.Message}");
-                }
-            }
-
-            if (!instantiated)
-            {
-                Debug.LogWarning("[LibraryManage] 无法实例化卡片 UI：缺少 OpenPackage 或对应的 InstantiateCardItem 方法（或已实现但签名不匹配）。");
-            }
+            DebugLog(sb.ToString());
         }
 
-        Debug.Log($"[LibraryManage] 已生成卡片项: {created}");
-    }
-
-    // ---------- 以下为补充公有方法，供 DeckManager 等调用 ----------
-    public void ClearPrefabArtPublic(GameObject go)
-    {
-        if (go == null) return;
+        // 排序：如果数据来自 CSV 且我们有 csv 行序映射，按 CSV 顺序；
+        // 否则按 CardStore.cardList 顺序，未在 CardStore 中的按 id 正序追加
+        List<KeyValuePair<int, int>> ordered;
         try
         {
-            var counters = go.GetComponentsInChildren<CardCounter>(true);
-            foreach (var c in counters)
+            if (usedSource == "FallbackCSV" && lastCsvOrderMap != null && lastCsvOrderMap.Count > 0)
             {
-                try
+                ordered = cardDict.OrderBy(kv =>
                 {
-                    if (c != null && c.gameObject != null)
-                        c.gameObject.SetActive(false);
-                }
-                catch { }
+                    if (lastCsvOrderMap.TryGetValue(kv.Key, out int idx)) return idx;
+                    // 未在 csvOrder 中的放到后面，按 id 正序
+                    return int.MaxValue / 2 + kv.Key;
+                }).ToList();
             }
-
-            var imgs = go.GetComponentsInChildren<Image>(true);
-            foreach (var img in imgs)
+            else
             {
-                if (img == null) continue;
-                var n = img.gameObject.name.ToLower();
-                if (n.Contains("placeholder") || n.Contains("artplaceholder") || n.Contains("thumb") || n.Contains("cardart"))
+                var indexMap = new Dictionary<int, int>();
+                if (cardStore != null)
                 {
-                    try { img.sprite = null; img.color = new Color(1, 1, 1, 0); } catch { }
-                }
-            }
+                    var csType = cardStore.GetType();
+                    IEnumerable<object> cardListEnum = null;
 
-            var texts = go.GetComponentsInChildren<Text>(true);
-            foreach (var t in texts)
-            {
-                if (t == null) continue;
-                var n = t.gameObject.name.ToLower();
-                if (n.Contains("name") || n.Contains("title") || n.Contains("desc") || n.Contains("count"))
-                {
-                    try { t.text = ""; } catch { }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            Debug.LogWarning($"[LibraryManage] ClearPrefabArtPublic 异常: {ex.Message}");
-        }
-    }
-
-    public void ApplyCardArtToInstance(GameObject go, int cardId, bool attachInfo = true)
-    {
-        if (go == null) return;
-
-        try
-        {
-            CardMessage def = null;
-            try { def = cardStore?.GetCardById(cardId); } catch { def = null; }
-
-            bool applied = false;
-
-            var mcd = go.GetComponentInChildren(typeof(MonsterCardDisplay), true) as Component;
-            if (mcd != null && def != null && def.GetType().Name.ToLower().Contains("monster"))
-            {
-                TryInvokeSetCard(mcd, def);
-                applied = true;
-            }
-
-            var scd = go.GetComponentInChildren(typeof(SpellCardDisplay), true) as Component;
-            if (scd != null && def != null && def.GetType().Name.ToLower().Contains("spell"))
-            {
-                TryInvokeSetCard(scd, def);
-                applied = true;
-            }
-
-            if (def != null)
-            {
-                string nameText = GetCardNameFromDef(def);
-                string descText = GetCardDescFromDef(def);
-
-                var texts = go.GetComponentsInChildren<Text>(true);
-                foreach (var t in texts)
-                {
-                    if (t == null) continue;
-                    var n = t.gameObject.name.ToLower();
-                    if (n.Contains("name") || n.Contains("title"))
+                    var field = csType.GetField("cardList", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic)
+                                ?? csType.GetField("CardList", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
+                    if (field != null)
                     {
-                        try { t.text = nameText ?? ""; } catch { }
-                    }
-                    else if (n.Contains("desc") || n.Contains("description"))
-                    {
-                        try { t.text = descText ?? ""; } catch { }
-                    }
-                    else if (n.Contains("count") || n.Contains("stack"))
-                    {
-                        try { t.text = ""; } catch { }
-                    }
-                }
-            }
-
-            var counters = go.GetComponentsInChildren<CardCounter>(true);
-            foreach (var c in counters)
-            {
-                if (c == null || c.gameObject == null) continue;
-                try
-                {
-                    if (attachInfo)
-                    {
-                        c.gameObject.SetActive(true);
-                        TryInvokeSetCounter(c, cardId);
+                        var val = field.GetValue(cardStore);
+                        cardListEnum = val as IEnumerable<object>;
                     }
                     else
                     {
-                        c.gameObject.SetActive(false);
+                        var prop = csType.GetProperty("cardlist", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic)
+                                   ?? csType.GetProperty("CardList", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
+                        if (prop != null)
+                        {
+                            var val = prop.GetValue(cardStore);
+                            cardListEnum = val as IEnumerable<object>;
+                        }
                     }
-                }
-                catch { }
-            }
 
-            if (!applied && openPackage != null)
-            {
-                try
-                {
-                    MethodInfo mi = openPackage.GetType().GetMethod("ApplyCardArtToInstance", BindingFlags.Public | BindingFlags.Instance);
-                    if (mi != null)
+                    if (cardListEnum != null)
                     {
-                        var ps = mi.GetParameters();
-                        object[] args = null;
-                        if (ps.Length == 2 && ps[0].ParameterType == typeof(GameObject) && ps[1].ParameterType == typeof(int))
-                            args = new object[] { go, cardId };
-                        else if (ps.Length == 3 && ps[0].ParameterType == typeof(GameObject) && ps[1].ParameterType == typeof(int) && ps[2].ParameterType == typeof(bool))
-                            args = new object[] { go, cardId, attachInfo };
-                        if (args != null) mi.Invoke(openPackage, args);
+                        int idx = 0;
+                        foreach (var cdef in cardListEnum)
+                        {
+                            if (cdef == null) { idx++; continue; }
+                            try
+                            {
+                                var t = cdef.GetType();
+                                var pid = t.GetProperty("id") ?? t.GetProperty("Id") ?? t.GetProperty("cardId") ?? t.GetProperty("CardId");
+                                int id = -1;
+                                if (pid != null) id = Convert.ToInt32(pid.GetValue(cdef));
+                                else
+                                {
+                                    var fid = t.GetField("id") ?? t.GetField("Id") ?? t.GetField("cardId") ?? t.GetField("CardId");
+                                    if (fid != null) id = Convert.ToInt32(fid.GetValue(cdef));
+                                }
+                                if (id >= 0 && !indexMap.ContainsKey(id)) indexMap[id] = idx;
+                            }
+                            catch { }
+                            idx++;
+                        }
                     }
                 }
-                catch { }
+
+                ordered = cardDict.OrderBy(kv =>
+                {
+                    if (indexMap.TryGetValue(kv.Key, out int i)) return i;
+                    // unknown ids go after known ones, but keep stable order by id (正序)
+                    return int.MaxValue / 2 + kv.Key;
+                }).ToList();
             }
         }
-        catch (Exception ex)
+        catch
         {
-            Debug.LogWarning($"[LibraryManage] ApplyCardArtToInstance 异常: {ex.Message}");
+            ordered = cardDict.OrderBy(kv => kv.Key).ToList();
         }
-    }
 
-    void TryInvokeSetCard(Component displayComp, object cardDef)
-    {
-        if (displayComp == null || cardDef == null) return;
-        try
+        // 遍历并实例化 UI
+        int created = 0;
+        foreach (var kv in ordered)
         {
-            var t = displayComp.GetType();
-            var mi1 = t.GetMethod("SetCard", new Type[] { cardDef.GetType() });
-            if (mi1 != null)
-            {
-                mi1.Invoke(displayComp, new object[] { cardDef });
-                return;
-            }
-            var mi2 = t.GetMethod("SetCard", new Type[] { typeof(object) });
-            if (mi2 != null)
-            {
-                mi2.Invoke(displayComp, new object[] { cardDef });
-                return;
-            }
-            var anyMi = t.GetMethod("SetCard", BindingFlags.Public | BindingFlags.Instance);
-            if (anyMi != null)
-            {
-                var ps = anyMi.GetParameters();
-                var args = new object[ps.Length];
-                for (int i = 0; i < ps.Length; i++)
-                {
-                    var pType = ps[i].ParameterType;
-                    if (pType.IsAssignableFrom(cardDef.GetType())) args[i] = cardDef;
-                    else if (pType == typeof(string)) args[i] = null;
-                    else if (pType == typeof(int)) args[i] = 0;
-                    else args[i] = null;
-                }
-                anyMi.Invoke(displayComp, args);
-            }
-        }
-        catch { }
-    }
+            int cardId = kv.Key;
+            int cnt = kv.Value;
+            if (cnt <= 0) continue;
 
-    void TryInvokeSetCounter(Component counterComp, int cardId)
-    {
-        if (counterComp == null) return;
-        try
-        {
-            var t = counterComp.GetType();
-            var mi = t.GetMethod("SetInfo", BindingFlags.Public | BindingFlags.Instance);
-            if (mi != null)
+            object defObj = null;
+            // 尝试通过 CardStore.GetCardById 获取定义（若可用）
+            try
             {
-                var ps = mi.GetParameters();
-                var args = new object[ps.Length];
-                for (int i = 0; i < ps.Length; i++)
+                if (cardStore != null)
                 {
-                    var p = ps[i].ParameterType;
-                    if (p == typeof(int)) args[i] = cardId;
-                    else if (p == typeof(string)) args[i] = null;
-                    else if (p == typeof(bool)) args[i] = false;
-                    else args[i] = null;
-                }
-                mi.Invoke(counterComp, args);
-                return;
-            }
-
-            var mi2 = t.GetMethod("SetCount", BindingFlags.Public | BindingFlags.Instance);
-            if (mi2 != null)
-            {
-                int cnt = 0;
-                try
-                {
-                    var gm = t.Assembly.GetType("CardCounter");
+                    var csType = cardStore.GetType();
+                    var gm = csType.GetMethod("GetCardById", BindingFlags.Public | BindingFlags.Instance)
+                             ?? csType.GetMethod("GetCard", BindingFlags.Public | BindingFlags.Instance);
                     if (gm != null)
                     {
-                        var gmi = gm.GetMethod("GetPlayerCount", BindingFlags.Public | BindingFlags.Static);
-                        if (gmi != null) cnt = (int)gmi.Invoke(null, new object[] { cardId });
+                        defObj = gm.Invoke(cardStore, new object[] { cardId });
+                    }
+                    else
+                    {
+                        // 尝试直接在 cardList 中查找
+                        try
+                        {
+                            var field = csType.GetField("cardList", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic)
+                                     ?? csType.GetField("CardList", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
+                            if (field != null)
+                            {
+                                var listObj = field.GetValue(cardStore) as System.Collections.IEnumerable;
+                                if (listObj != null)
+                                {
+                                    foreach (var item in listObj)
+                                    {
+                                        int id = -1;
+                                        var t = item.GetType();
+                                        var pid = t.GetProperty("id") ?? t.GetProperty("Id") ?? t.GetProperty("cardId");
+                                        if (pid != null) id = Convert.ToInt32(pid.GetValue(item));
+                                        else
+                                        {
+                                            var fid = t.GetField("id") ?? t.GetField("Id") ?? t.GetField("cardId");
+                                            if (fid != null) id = Convert.ToInt32(fid.GetValue(item));
+                                        }
+                                        if (id == cardId) { defObj = item; break; }
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
                     }
                 }
-                catch { cnt = 0; }
-                mi2.Invoke(counterComp, new object[] { cnt });
-                return;
+            }
+            catch { defObj = null; }
+
+            GameObject instance = TryInstantiateViaCardStoreOrOpenPackage(defObj, cnt, attachInfo);
+            if (instance == null)
+            {
+                instance = CreateFallbackTextItem(defObj, cardId, cnt);
+            }
+
+            if (instance != null)
+            {
+                instance.transform.SetParent(contentParent, false);
+                // 卡池需要显示卡片信息时，运行时强制激活信息面板；否则隐藏信息面板（与 DeckManager 行为不同）
+                if (forceShowCardInfo) ShowCardInfo(instance);
+                else HideCardInfo(instance);
+                created++;
             }
         }
-        catch { }
+
+        DebugLog($"LibraryManager: 刷新完成，创建项={created}");
     }
 
-    string GetCardNameFromDef(object def)
+    void ClearSlots()
     {
-        if (def == null) return null;
-        try
+        if (contentParent == null) return;
+        for (int i = contentParent.childCount - 1; i >= 0; i--)
         {
-            var t = def.GetType();
-            var p = t.GetProperty("Card_Name") ?? t.GetProperty("Name") ?? t.GetProperty("cardName");
-            if (p != null) return p.GetValue(def) as string;
-            var f = t.GetField("Card_Name") ?? t.GetField("Name");
-            if (f != null) return f.GetValue(def) as string;
+            var c = contentParent.GetChild(i);
+            if (Application.isPlaying) Destroy(c.gameObject); else DestroyImmediate(c.gameObject);
         }
-        catch { }
+    }
+
+    // ========== Instantiate helpers (与 DeckManager 一致) ==========
+    GameObject TryInstantiateViaCardStoreOrOpenPackage(object defObj, int count, bool attachInfoFlag)
+    {
+        if (cardStore != null)
+        {
+            MethodInfo mi = cardStore.GetType().GetMethod("InstantiateCardItem", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (mi != null)
+            {
+                try
+                {
+                    var args = BuildArgsForMethod(mi.GetParameters(), defObj, contentParent, count, attachInfoFlag);
+                    var res = mi.Invoke(cardStore, args) as GameObject;
+                    if (res != null) return res;
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"LibraryManager: CardStore.InstantiateCardItem 调用失败: {ex.Message}");
+                }
+            }
+        }
+
+        if (cardStore != null)
+        {
+            var opComp = FindComponentOn(cardStore.gameObject, "OpenPackage");
+            if (opComp != null)
+            {
+                var mi = opComp.GetType().GetMethod("InstantiateCardItem", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                if (mi != null)
+                {
+                    try
+                    {
+                        var args = BuildArgsForMethod(mi.GetParameters(), defObj, contentParent, count, attachInfoFlag);
+                        var res = mi.Invoke(opComp, args) as GameObject;
+                        if (res != null) return res;
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning($"LibraryManager: OpenPackage (from CardStore) InstantiateCardItem 调用失败: {ex.Message}");
+                    }
+                }
+            }
+        }
+
+        var openPkg = FindComponentByTypeName("OpenPackage");
+        if (openPkg != null)
+        {
+            var mi = openPkg.GetType().GetMethod("InstantiateCardItem", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (mi != null)
+            {
+                try
+                {
+                    var args = BuildArgsForMethod(mi.GetParameters(), defObj, contentParent, count, attachInfoFlag);
+                    var res = mi.Invoke(openPkg, args) as GameObject;
+                    if (res != null) return res;
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"LibraryManager: 全局 OpenPackage.InstantiateCardItem 调用失败: {ex.Message}");
+                }
+            }
+        }
+
         return null;
     }
 
-    string GetCardDescFromDef(object def)
-    {
-        if (def == null) return null;
-        try
-        {
-            var t = def.GetType();
-            var p = t.GetProperty("Card_Description") ?? t.GetProperty("Description") ?? t.GetProperty("Desc");
-            if (p != null) return p.GetValue(def) as string;
-            var f = t.GetField("Card_Description") ?? t.GetField("Description");
-            if (f != null) return f.GetValue(def) as string;
-        }
-        catch { }
-        return null;
-    }
-    // ---------- 补充/公用方法结束 ----------
-
-    object[] BuildArgsForMethod(ParameterInfo[] ps, CardMessage def, Transform parent, int count, bool attachInfo)
+    object[] BuildArgsForMethod(ParameterInfo[] ps, object defObj, Transform parent, int count, bool attachInfoFlag)
     {
         if (ps == null || ps.Length == 0) return new object[0];
-
         var args = new object[ps.Length];
         for (int i = 0; i < ps.Length; i++)
         {
-            var pType = ps[i].ParameterType;
-            if (typeof(CardMessage).IsAssignableFrom(pType))
+            var pInfo = ps[i];
+            var pType = pInfo.ParameterType;
+
+            if (defObj != null && pType.IsAssignableFrom(defObj.GetType()))
             {
-                args[i] = def;
+                args[i] = defObj;
             }
             else if (typeof(Transform).IsAssignableFrom(pType) || (typeof(UnityEngine.Object).IsAssignableFrom(pType) && pType.Name == "Transform"))
             {
@@ -634,26 +365,282 @@ public class LibraryManage : MonoBehaviour
             }
             else if (pType == typeof(bool))
             {
-                args[i] = attachInfo;
+                args[i] = attachInfoFlag;
             }
             else if (pType == typeof(object))
             {
-                args[i] = def;
+                args[i] = defObj;
+            }
+            else if (pType == typeof(string))
+            {
+                args[i] = null;
             }
             else
             {
-                if (pType == typeof(string)) args[i] = null;
-                else args[i] = null;
+                args[i] = null;
             }
         }
         return args;
     }
 
-    Dictionary<int, int> ParsePlayerDataCsvSimple(string text)
+    Component FindComponentOn(GameObject go, string typeName)
     {
-        var dict = new Dictionary<int, int>();
-        if (string.IsNullOrEmpty(text)) return dict;
+        if (go == null || string.IsNullOrEmpty(typeName)) return null;
+        foreach (var comp in go.GetComponents<Component>())
+        {
+            if (comp == null) continue;
+            if (comp.GetType().Name.Equals(typeName, StringComparison.OrdinalIgnoreCase))
+                return comp as Component;
+        }
+        return null;
+    }
+
+    Component FindComponentByTypeName(string typeName)
+    {
+        if (string.IsNullOrEmpty(typeName)) return null;
+        try
+        {
+            Type found = null;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    foreach (var t in asm.GetTypes())
+                    {
+                        if (t != null && string.Equals(t.Name, typeName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            found = t;
+                            break;
+                        }
+                    }
+                }
+                catch { }
+                if (found != null) break;
+            }
+
+            if (found != null)
+            {
+                var obj = UnityEngine.Object.FindObjectOfType(found);
+                return obj as Component;
+            }
+
+            foreach (var mb in Resources.FindObjectsOfTypeAll<MonoBehaviour>())
+            {
+                if (mb == null) continue;
+                if (mb.GetType().Name.Equals(typeName, StringComparison.OrdinalIgnoreCase))
+                    return mb;
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"LibraryManager: FindComponentByTypeName 异常: {ex.Message}");
+        }
+        return null;
+    }
+
+    // ========== Fallback 创建项 ==========
+    GameObject CreateFallbackTextItem(object defObj, int cardId, int count)
+    {
+        var go = new GameObject($"LibraryCard_{cardId}");
+        var rt = go.AddComponent<RectTransform>();
+        TextMeshProUGUI tmp = null;
+        try
+        {
+            tmp = go.AddComponent<TextMeshProUGUI>();
+            tmp.fontSize = 18;
+            tmp.color = Color.white;
+            tmp.alignment = TextAlignmentOptions.Center;
+            string nameText = null;
+            try
+            {
+                if (defObj != null)
+                {
+                    var t = defObj.GetType();
+                    var p = t.GetProperty("Card_Name") ?? t.GetProperty("Name") ?? t.GetProperty("cardName") ?? t.GetProperty("card_name");
+                    if (p != null) nameText = p.GetValue(defObj) as string;
+                }
+            }
+            catch { }
+            tmp.text = $"{(nameText ?? ("ID" + cardId))}  ×{count}";
+        }
+        catch
+        {
+            var t = go.AddComponent<Text>();
+            t.text = $"ID{cardId}  ×{count}";
+            t.fontSize = 14;
+            t.color = Color.white;
+        }
+        rt.sizeDelta = new Vector2(300, 40);
+        return go;
+    }
+
+    // ========== Show / Hide Card Info（Library 会使用 ShowCardInfo） ==========
+    void HideCardInfo(GameObject instance)
+    {
+        if (instance == null) return;
+
+        // 只隐藏明确的“信息/详情/Tooltip”面板，不触碰装饰性节点（Border/勾玉/CardLv 等）
+        var infoNames = new[] { "卡片信息", "CardInfo", "cardInfo", "InfoPanel", "Card_Detail", "卡片详情", "DetailPanel", "Tooltip", "卡片信息面板" };
+
+        foreach (var t in instance.GetComponentsInChildren<Transform>(true))
+        {
+            if (t == null || t.gameObject == null) continue;
+            var nm = t.name ?? "";
+            foreach (var name in infoNames)
+            {
+                if (nm.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    t.gameObject.SetActive(false);
+                    break;
+                }
+            }
+        }
+
+        // 保险：不要去模糊禁用其他脚本。只确保 CardLv 脚本处于启用状态（如果存在的话）
+        try
+        {
+            foreach (var lv in instance.GetComponentsInChildren<MonoBehaviour>(true))
+            {
+                var t = lv.GetType();
+                if (string.Equals(t.Name, "CardLv", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!lv.enabled) lv.enabled = true;
+                }
+            }
+        }
+        catch { }
+    }
+
+    void ShowCardInfo(GameObject instance)
+    {
+        if (instance == null) return;
+
+        var infoNames = new[] {
+            "卡片信息", "CardInfo", "cardInfo", "InfoPanel", "Card_Detail",
+            "卡片详情", "DetailPanel", "Tooltip", "卡片信息面板"
+        };
+
+        try
+        {
+            foreach (var t in instance.GetComponentsInChildren<Transform>(true))
+            {
+                if (t == null || t.gameObject == null) continue;
+                var nm = t.name ?? "";
+                foreach (var name in infoNames)
+                {
+                    if (nm.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        t.gameObject.SetActive(true);
+                        break;
+                    }
+                }
+            }
+        }
+        catch { }
+
+        // 确保 CardLv 脚本处于启用状态
+        try
+        {
+            foreach (var mb in instance.GetComponentsInChildren<MonoBehaviour>(true))
+            {
+                if (mb == null) continue;
+                var t = mb.GetType();
+                if (string.Equals(t.Name, "CardLv", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!mb.enabled) mb.enabled = true;
+                }
+            }
+        }
+        catch { }
+    }
+
+    // ========== 从 PlayerDataManager 获取卡片数据（尝试常见字段/方法） ==========
+    Dictionary<int, int> GetCardsFromPlayerDataManager()
+    {
+        var result = new Dictionary<int, int>();
+        if (pData == null) return result;
+        try
+        {
+            var pdType = pData.GetType();
+
+            // 1) PlayerCardDict / PlayerCardCounts 等常见命名尝试
+            var prop = pdType.GetProperty("PlayerCardDict", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
+                       ?? pdType.GetProperty("playerCardDict", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
+                       ?? pdType.GetProperty("PlayerCardCounts", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
+                       ?? pdType.GetProperty("playerCardCounts", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (prop != null)
+            {
+                var dictObj = prop.GetValue(pData) as System.Collections.IDictionary;
+                if (dictObj != null)
+                {
+                    foreach (var k in dictObj.Keys)
+                    {
+                        int id = Convert.ToInt32(k);
+                        int cnt = Convert.ToInt32(dictObj[k]);
+                        if (cnt > 0) result[id] = cnt;
+                    }
+                    if (result.Count > 0) return result;
+                }
+            }
+
+            var field = pdType.GetField("PlayerCards", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
+                     ?? pdType.GetField("playerCards", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
+                     ?? pdType.GetField("PlayerCardCounts", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
+                     ?? pdType.GetField("playerCardCounts", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (field != null)
+            {
+                var arr = field.GetValue(pData) as int[];
+                if (arr != null)
+                {
+                    for (int i = 0; i < arr.Length; i++)
+                        if (arr[i] > 0) result[i] = arr[i];
+                    if (result.Count > 0) return result;
+                }
+            }
+
+            // 2) 常见方法尝试
+            var methodsToTry = new string[] { "GetPlayerCards", "GetPlayerCardCounts", "GetCardDict", "GetCards", "GetAllCards" };
+            foreach (var mname in methodsToTry)
+            {
+                var m = pdType.GetMethod(mname, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                if (m != null)
+                {
+                    var res = m.Invoke(pData, null);
+                    if (res is System.Collections.IDictionary dictRes)
+                    {
+                        foreach (var k in dictRes.Keys)
+                        {
+                            int id = Convert.ToInt32(k);
+                            int cnt = Convert.ToInt32(dictRes[k]);
+                            if (cnt > 0) result[id] = cnt;
+                        }
+                        if (result.Count > 0) return result;
+                    }
+                    else if (res is int[] arrRes)
+                    {
+                        for (int i = 0; i < arrRes.Length; i++)
+                            if (arrRes[i] > 0) result[i] = arrRes[i];
+                        if (result.Count > 0) return result;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"LibraryManager: GetCardsFromPlayerDataManager 异常: {ex.Message}");
+        }
+        return result;
+    }
+
+    // ========== CSV 解析（专注 card 行），并返回行顺序映射 outOrderMap ==========
+    Dictionary<int, int> ParsePlayerDataCsvForCards(string text, CsvMergeStrategy mergeStrategy, bool onlyCardLines, out Dictionary<int, int> outOrderMap)
+    {
+        var dictCard = new Dictionary<int, int>();
+        var dictDeck = new Dictionary<int, int>();
+        outOrderMap = new Dictionary<int, int>();
+        if (string.IsNullOrEmpty(text)) return new Dictionary<int, int>();
         var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        int orderCounter = 0;
         foreach (var raw in lines)
         {
             var line = raw.Trim();
@@ -661,170 +648,55 @@ public class LibraryManage : MonoBehaviour
             var parts = line.Split(',');
             if (parts.Length < 3) continue;
             var tag = parts[0].Trim().ToLower();
-            if (tag == "card")
+            if (onlyCardLines && tag != "card") continue;
+            if ((tag == "card" || tag == "deck") && int.TryParse(parts[1].Trim(), out int id) && int.TryParse(parts[2].Trim(), out int cnt))
             {
-                if (int.TryParse(parts[1].Trim(), out int id) && int.TryParse(parts[2].Trim(), out int cnt))
+                if (cnt <= 0) continue;
+                if (tag == "card")
                 {
-                    if (cnt > 0) { if (dict.ContainsKey(id)) dict[id] += cnt; else dict[id] = cnt; }
-                }
-            }
-        }
-        return dict;
-    }
-
-    bool ShouldAttachCardInfo()
-    {
-        if (forceAttachInfo) return true;
-        if (!defaultShowInfo) return false;
-        if (!onlyInstantiateInfoInPoolScene) return true;
-        return SceneManager.GetActiveScene().name == poolSceneName;
-    }
-
-    void ClearLibrary()
-    {
-        if (libraryPanel == null) return;
-        for (int i = libraryPanel.childCount - 1; i >= 0; i--)
-            Destroy(libraryPanel.GetChild(i).gameObject);
-    }
-
-    // ---------- 新增：对外接口与辅助方法（保存/更新卡池数量并更新 UI） ----------
-
-    // 安全修改玩家持有数并更新界面（delta 可以为正或负）
-    public bool TryChangePlayerCount(int cardId, int delta)
-    {
-        try
-        {
-            if (cardId <= 0) return false;
-            if (currentPlayerCounts == null) currentPlayerCounts = new Dictionary<int, int>();
-
-            int old = 0;
-            currentPlayerCounts.TryGetValue(cardId, out old);
-            int now = old + delta;
-            if (now < 0) return false; // 不允许负数
-
-            currentPlayerCounts[cardId] = now;
-
-            // 更新库中显示该 cardId 的实例（只更新计数/计数显示部分）
-            UpdateLibraryInstancesForCardId(cardId);
-
-            // 尝试写回 PlayerDataManager（若存在常见接口）
-            TryPersistToPlayerDataManager(cardId, now);
-
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Debug.LogWarning($"[LibraryManage] TryChangePlayerCount 异常: {ex.Message}");
-            return false;
-        }
-    }
-
-    // 更新 libraryPanel 下对应 cardId 的所有项（尝试刷新 CardCounter 或 count 文本）
-    void UpdateLibraryInstancesForCardId(int cardId)
-    {
-        if (libraryPanel == null) return;
-
-        for (int i = 0; i < libraryPanel.childCount; i++)
-        {
-            var child = libraryPanel.GetChild(i);
-            if (child == null) continue;
-
-            bool matched = false;
-            var handlers = child.GetComponentsInChildren(typeof(CardDragHandler), true);
-            if (handlers != null && handlers.Length > 0)
-            {
-                foreach (var h in handlers)
-                {
-                    var ch = h as CardDragHandler;
-                    if (ch != null && ch.CardId == cardId)
+                    if (dictCard.ContainsKey(id)) dictCard[id] += cnt;
+                    else
                     {
-                        matched = true;
-                        break;
-                    }
-                }
-            }
-
-            if (matched)
-            {
-                // 更新 CardCounter 组件显示
-                var counters = child.GetComponentsInChildren(typeof(CardCounter), true);
-                foreach (var c in counters)
-                {
-                    try
-                    {
-                        var cc = c as Component;
-                        TryInvokeSetCounter(cc, cardId);
-                    }
-                    catch { }
-                }
-
-                // 更新可能的 count 文本节点（name 包含 "count" 或 "stack"）
-                var texts = child.GetComponentsInChildren<Text>(true);
-                foreach (var t in texts)
-                {
-                    if (t == null) continue;
-                    var n = t.gameObject.name.ToLower();
-                    if (n.Contains("count") || n.Contains("stack"))
-                    {
-                        try
+                        dictCard[id] = cnt;
+                        // 记录 CSV 中 card 首次出现的顺序（仅在 tag == "card" 时）
+                        if (!outOrderMap.ContainsKey(id))
                         {
-                            int val = 0;
-                            currentPlayerCounts.TryGetValue(cardId, out val);
-                            t.text = val.ToString();
+                            outOrderMap[id] = orderCounter++;
                         }
-                        catch { }
                     }
                 }
+                else
+                {
+                    dictDeck[id] = cnt;
+                }
             }
         }
+
+        var outDict = new Dictionary<int, int>();
+        switch (mergeStrategy)
+        {
+            case CsvMergeStrategy.PreferDeckThenCard:
+                foreach (var kv in dictDeck) outDict[kv.Key] = kv.Value;
+                foreach (var kv in dictCard) if (!outDict.ContainsKey(kv.Key)) outDict[kv.Key] = kv.Value;
+                break;
+            case CsvMergeStrategy.PreferCardThenDeck:
+                foreach (var kv in dictCard) outDict[kv.Key] = kv.Value;
+                foreach (var kv in dictDeck) if (!outDict.ContainsKey(kv.Key)) outDict[kv.Key] = kv.Value;
+                break;
+            case CsvMergeStrategy.SumBoth:
+                foreach (var kv in dictCard) outDict[kv.Key] = kv.Value;
+                foreach (var kv in dictDeck) if (outDict.ContainsKey(kv.Key)) outDict[kv.Key] += kv.Value; else outDict[kv.Key] = kv.Value;
+                break;
+        }
+        return outDict;
     }
 
-    // 通过反射尝试把变化写回 PlayerDataManager（兼容常见字段/方法）
-    void TryPersistToPlayerDataManager(int cardId, int newCount)
+    void DebugLog(string s)
     {
-        if (playerDataManager == null) return;
-        try
+        if (debugText != null)
         {
-            var pd = playerDataManager;
-            // 优先尝试 PlayerDeckDict 字典写回
-            var prop = pd.GetType().GetProperty("PlayerDeckDict");
-            if (prop != null)
-            {
-                var dictObj = prop.GetValue(pd) as System.Collections.IDictionary;
-                if (dictObj != null)
-                {
-                    dictObj[cardId] = newCount;
-                    // 若 PlayerDataManager 有保存/同步方法，这里不做调用（项目自有实现可能不同）
-                    Debug.Log($"[LibraryManage] 已写回 PlayerDataManager.PlayerDeckDict id={cardId} count={newCount}");
-                    return;
-                }
-            }
-
-            // 尝试 SetPlayerCardCount(int id, int cnt)
-            var m = pd.GetType().GetMethod("SetPlayerCardCount", BindingFlags.Public | BindingFlags.Instance);
-            if (m != null)
-            {
-                m.Invoke(pd, new object[] { cardId, newCount });
-                Debug.Log($"[LibraryManage] 调用 PlayerDataManager.SetPlayerCardCount(id,count) 写回 id={cardId} count={newCount}");
-                return;
-            }
-
-            // 尝试直接写入 PlayerDeck 数组字段（若存在）
-            var f = pd.GetType().GetField("PlayerDeck", BindingFlags.Public | BindingFlags.Instance);
-            if (f != null)
-            {
-                var arr = f.GetValue(pd) as int[];
-                if (arr != null && cardId >= 0 && cardId < arr.Length)
-                {
-                    arr[cardId] = newCount;
-                    Debug.Log($"[LibraryManage] 已写回 PlayerDataManager.PlayerDeck[{cardId}] = {newCount}");
-                    return;
-                }
-            }
+            try { debugText.text = s; } catch { }
         }
-        catch (Exception ex)
-        {
-            Debug.LogWarning($"[LibraryManage] TryPersistToPlayerDataManager 写回失败: {ex.Message}");
-        }
+        Debug.Log(s);
     }
 }

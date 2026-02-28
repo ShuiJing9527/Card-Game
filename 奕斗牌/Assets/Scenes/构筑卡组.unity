@@ -850,17 +850,6 @@ PrefabInstance:
     m_AddedGameObjects: []
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: c531986ecfb1bb84a97b9945cd93857f, type: 3}
---- !u!114 &621882011 stripped
-MonoBehaviour:
-  m_CorrespondingSourceObject: {fileID: 7323074908763949084, guid: c531986ecfb1bb84a97b9945cd93857f, type: 3}
-  m_PrefabInstance: {fileID: 621882010}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 0}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 793226637a4eddd40abba829868d9675, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::PlayerDataManager
 --- !u!1 &721978481
 GameObject:
   m_ObjectHideFlags: 0
@@ -1490,28 +1479,6 @@ PrefabInstance:
     m_AddedGameObjects: []
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: 2f964cece62ac7a468543e365ca8aa17, type: 3}
---- !u!114 &1093396570 stripped
-MonoBehaviour:
-  m_CorrespondingSourceObject: {fileID: 7998180367498139274, guid: 2f964cece62ac7a468543e365ca8aa17, type: 3}
-  m_PrefabInstance: {fileID: 1093396569}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 0}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f5086deaf23578f44ba0fa078af7f35c, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::OpenPackage
---- !u!114 &1093396571 stripped
-MonoBehaviour:
-  m_CorrespondingSourceObject: {fileID: 6316078803490240694, guid: 2f964cece62ac7a468543e365ca8aa17, type: 3}
-  m_PrefabInstance: {fileID: 1093396569}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 0}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 6f6a623f3b14e6a4ea06771dc831586d, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::CardStore
 --- !u!1 &1220092082
 GameObject:
   m_ObjectHideFlags: 0
@@ -2058,16 +2025,13 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: b1373eb73497d174683ea9488500de95, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::LibraryManage
-  playerDataCsv: {fileID: 4900000, guid: 341817a88ffb9ae449dd3d3426bfdabd, type: 3}
-  libraryPanel: {fileID: 501825831}
-  defaultShowInfo: 1
-  onlyInstantiateInfoInPoolScene: 1
-  poolSceneName: CardPoolScene
-  forceAttachInfo: 1
-  openPackage: {fileID: 1093396570}
-  cardStore: {fileID: 1093396571}
-  playerDataManager: {fileID: 621882011}
-  clearOnStart: 1
+  contentParent: {fileID: 501825831}
+  debugText: {fileID: 0}
+  fallbackPlayerDataCsv: {fileID: 4900000, guid: 341817a88ffb9ae449dd3d3426bfdabd, type: 3}
+  attachInfo: 1
+  csvMergeStrategy: 1
+  forceUseCsv: 0
+  onlyCardLines: 1
 --- !u!114 &1657943283
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2080,12 +2044,13 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 315ca0e2e169a1d4aaad494d14731ce7, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::DeckManager
-  librarySource: {fileID: 1657943282}
-  deckPanel: {fileID: 35158260}
-  deckEntryPrefab: {fileID: 0}
-  playerDataCsv: {fileID: 4900000, guid: 341817a88ffb9ae449dd3d3426bfdabd, type: 3}
-  clearOnStart: 1
-  hideCardInfoInDeck: 1
+  contentParent: {fileID: 35158260}
+  debugText: {fileID: 0}
+  fallbackPlayerDataCsv: {fileID: 4900000, guid: 341817a88ffb9ae449dd3d3426bfdabd, type: 3}
+  attachInfo: 1
+  csvMergeStrategy: 0
+  forceUseCsv: 0
+  testOnlyDeckLines: 1
 --- !u!1 &1697467935
 GameObject:
   m_ObjectHideFlags: 0
