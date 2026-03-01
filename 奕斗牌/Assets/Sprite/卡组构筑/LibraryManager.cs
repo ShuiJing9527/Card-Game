@@ -699,4 +699,77 @@ public class LibraryManager : MonoBehaviour
         }
         Debug.Log(s);
     }
+
+    // ===================== 新增：当卡从卡组移回库时调用 =====================
+    /// <summary>
+    /// 仅内存层面处理：把一张卡从 playerDeck 移回 playerCards（不写盘）。
+    /// 返回 true 表示成功（caller 可据此决定后续行为）。
+    /// 会刷新 Library UI（简单实现，必要时可优化成只更新单项）。
+    /// </summary>
+    public bool OnCardReturnedToLibraryNoSave(int cardId)
+    {
+        if (cardId < 0) return false;
+        if (pData == null)
+        {
+            DebugLog($"LibraryManager: 无 PlayerDataManager，无法把 cardId={cardId} 返回到库");
+            return false;
+        }
+
+        bool ok = false;
+        try
+        {
+            ok = pData.TryTransferCardFromDeckNoSave(cardId, 1);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"LibraryManager: OnCardReturnedToLibraryNoSave 调用 PlayerDataManager 异常: {ex.Message}");
+            ok = false;
+        }
+
+        if (ok)
+        {
+            // 简单刷新整个库 UI（如果频繁操作可以换成更细粒度更新）
+            RefreshLibraryUI();
+        }
+        else
+        {
+            DebugLog($"LibraryManager: 返回卡片到库失败 id={cardId}");
+        }
+
+        return ok;
+    }
+
+    /// <summary>
+    /// 把卡从卡组移回库（兼容 autoSave）：调用 TryTransferCardFromDeck（会根据 PlayerDataManager.autoSave 决定是否写盘）
+    /// 并刷新 Library UI。
+    /// </summary>
+    public void OnCardReturnedToLibrary(int cardId)
+    {
+        if (cardId < 0) return;
+        if (pData == null)
+        {
+            DebugLog($"LibraryManager: 无 PlayerDataManager，无法把 cardId={cardId} 返回到库");
+            return;
+        }
+
+        bool ok = false;
+        try
+        {
+            ok = pData.TryTransferCardFromDeck(cardId, 1);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"LibraryManager: OnCardReturnedToLibrary 调用 PlayerDataManager 异常: {ex.Message}");
+            ok = false;
+        }
+
+        if (ok)
+        {
+            RefreshLibraryUI();
+        }
+        else
+        {
+            DebugLog($"LibraryManager: 返回卡片到库失败 id={cardId}");
+        }
+    }
 }

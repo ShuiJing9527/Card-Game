@@ -630,7 +630,77 @@ public class PlayerDataManager : MonoBehaviour
         return true;
     }
 
-    // Save（保持 merge 策略） - 仅允许主实例执行保存，避免其它副本覆盖
+    // ✅ 新增：批量设置卡组字典（供 DeckTempModel.CommitToPlayerData 使用）
+    /// <summary>
+    /// 设置整个卡组字典（仅内存操作，不写盘）—— 用于临时模型提交
+    /// 触发 OnDeckChanged 事件（每个 ID 单独触发）
+    /// </summary>
+    public void SetDeckCardCountsNoSave(Dictionary<int, int> counts)
+    {
+        if (counts == null)
+        {
+            playerDeckDict.Clear();
+            dataChanged = true;
+            // 若需要通知清空，可在此加广播；但通常 UI 直接重建更高效
+            return;
+        }
+
+        // 先清空旧数据（避免残留）
+        var oldDict = new Dictionary<int, int>(playerDeckDict);
+        playerDeckDict.Clear();
+
+        // 逐项写入并触发事件
+        foreach (var kv in counts)
+        {
+            int cardId = kv.Key;
+            int count = kv.Value;
+
+            if (count <= 0) continue;
+
+            int oldCount = oldDict.ContainsKey(cardId) ? oldDict[cardId] : 0;
+            if (oldCount != count)
+            {
+                playerDeckDict[cardId] = count;
+                dataChanged = true;
+                OnDeckChanged?.Invoke(cardId, count);
+            }
+            else
+            {
+                playerDeckDict[cardId] = count; // 仍需保留（防止被意外清空）
+            }
+
+            // 同步老数组（兼容）
+            if (playerDeck != null && cardId >= 0 && cardId < playerDeck.Length)
+                playerDeck[cardId] = count;
+        }
+
+        // 清理不再存在的卡片（oldDict 中有但新 counts 中没有的）
+        foreach (var cardId in oldDict.Keys)
+        {
+            if (!counts.ContainsKey(cardId))
+            {
+                dataChanged = true;
+                playerDeckDict.Remove(cardId);
+                if (playerDeck != null && cardId >= 0 && cardId < playerDeck.Length)
+                    playerDeck[cardId] = 0;
+                OnDeckChanged?.Invoke(cardId, 0);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 设置整个卡组字典（兼容 autoSave 行为）
+    /// </summary>
+    public void SetDeckCardCounts(Dictionary<int, int> counts)
+    {
+        SetDeckCardCountsNoSave(counts);
+        if (autoSave)
+        {
+            SavePlayerData();
+        }
+    }
+
+    // Save（保持 merge 策略） - 仅允许主实例执行保存
     public void SavePlayerData()
     {
         try

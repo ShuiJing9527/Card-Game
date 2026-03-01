@@ -776,6 +776,7 @@ GameObject:
   - component: {fileID: 6538614825171131010}
   - component: {fileID: 7927099145889790456}
   - component: {fileID: 1177919571088906689}
+  - component: {fileID: -7009158574753073636}
   m_Layer: 5
   m_Name: "\u6C34\u724C"
   m_TagString: Untagged
@@ -894,6 +895,20 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::CardPointer
   selectionManager: {fileID: 0}
+--- !u!114 &-7009158574753073636
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5407072068160268129}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d995e79796c9e9945b6712f935cd42af, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CardDragHandler
+  cardId: 0
+  overlay: {fileID: 0}
 --- !u!1 &5710729347261174689
 GameObject:
   m_ObjectHideFlags: 0

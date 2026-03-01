@@ -135,6 +135,7 @@ GameObject:
   - component: {fileID: 35158260}
   - component: {fileID: 35158261}
   - component: {fileID: 35158262}
+  - component: {fileID: 35158263}
   m_Layer: 5
   m_Name: "\u5361\u7EC4"
   m_TagString: Untagged
@@ -199,6 +200,20 @@ MonoBehaviour:
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.ContentSizeFitter
   m_HorizontalFit: 0
   m_VerticalFit: 2
+--- !u!114 &35158263
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 35158259}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 75e0fce8e4ff9594cb91c2541e76743a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::DeckDropZone
+  deckContainer: {fileID: 35158260}
+  tempModel: {fileID: 11400000, guid: 0b556644a9b8c4e42823680138ed25de, type: 2}
 --- !u!1 &127635736
 GameObject:
   m_ObjectHideFlags: 0
@@ -275,6 +290,37 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 127635736}
   m_CullTransparentMesh: 1
+--- !u!1 &187726314
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 187726315}
+  m_Layer: 0
+  m_Name: GameObject
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &187726315
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 187726314}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 854.7416, y: 592.81134, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &242499597
 GameObject:
   m_ObjectHideFlags: 0
@@ -527,6 +573,7 @@ GameObject:
   - component: {fileID: 501825831}
   - component: {fileID: 501825832}
   - component: {fileID: 501825833}
+  - component: {fileID: 501825834}
   m_Layer: 5
   m_Name: "\u5361\u6C60\u5217\u8868"
   m_TagString: Untagged
@@ -591,6 +638,21 @@ MonoBehaviour:
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.ContentSizeFitter
   m_HorizontalFit: 0
   m_VerticalFit: 2
+--- !u!114 &501825834
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 501825830}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f1ecfcf2fb0637f409fdbe9735d56440, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::LibraryDropZone
+  libContainer: {fileID: 501825831}
+  libraryManager: {fileID: 1657943282}
+  tempModel: {fileID: 11400000, guid: 0b556644a9b8c4e42823680138ed25de, type: 2}
 --- !u!1 &542531905
 GameObject:
   m_ObjectHideFlags: 0
@@ -761,6 +823,10 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 8589176191912989872, guid: fa3697c7ac4ff5c4b929179c653e8894, type: 3}
       propertyPath: debugLogs
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8589176191912989872, guid: fa3697c7ac4ff5c4b929179c653e8894, type: 3}
+      propertyPath: m_Enabled
       value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 8589176191912989872, guid: fa3697c7ac4ff5c4b929179c653e8894, type: 3}
@@ -1304,37 +1370,6 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 904969716}
   m_CullTransparentMesh: 1
---- !u!1 &962020420
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 962020421}
-  m_Layer: 0
-  m_Name: GameObject
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &962020421
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 962020420}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 805.68555, y: 594.6626, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1061294490
 GameObject:
   m_ObjectHideFlags: 0
@@ -1991,6 +2026,7 @@ GameObject:
   - component: {fileID: 1657943281}
   - component: {fileID: 1657943282}
   - component: {fileID: 1657943283}
+  - component: {fileID: 1657943284}
   m_Layer: 0
   m_Name: Deck&Library
   m_TagString: Untagged
@@ -2032,6 +2068,7 @@ MonoBehaviour:
   csvMergeStrategy: 1
   forceUseCsv: 0
   onlyCardLines: 1
+  forceShowCardInfo: 1
 --- !u!114 &1657943283
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -2051,6 +2088,18 @@ MonoBehaviour:
   csvMergeStrategy: 0
   forceUseCsv: 0
   testOnlyDeckLines: 1
+--- !u!114 &1657943284
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1657943279}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b9b1ae4525acd5143a22a81fbca59403, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::DragDropManager
 --- !u!1 &1697467935
 GameObject:
   m_ObjectHideFlags: 0
@@ -2304,4 +2353,4 @@ SceneRoots:
   - {fileID: 1657943281}
   - {fileID: 621882010}
   - {fileID: 1093396569}
-  - {fileID: 962020421}
+  - {fileID: 187726315}
