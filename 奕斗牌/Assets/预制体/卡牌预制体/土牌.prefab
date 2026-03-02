@@ -1485,6 +1485,10 @@ MonoBehaviour:
   cardId: 0
   dragRoot: {fileID: 0}
   attachSelectionToDragRoot: 1
+  createCloneOnDrag: 0
+  minCloneSize: {x: 160, y: 160}
+  maxCloneSize: {x: 220, y: 220}
+  fallbackCloneSize: {x: 220, y: 220}
 --- !u!114 &531379779140943292
 MonoBehaviour:
   m_ObjectHideFlags: 0

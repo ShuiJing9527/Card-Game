@@ -10,8 +10,8 @@ using UnityEngine.UI;
 public class LibraryManager : MonoBehaviour
 {
     [Header("UI")]
-    public Transform contentParent;                 // ScrollView Content (必填)
-    public TextMeshProUGUI debugText;               // 可选，显示调试信息
+    public Transform contentParent; // ScrollView Content (必填)
+    public TextMeshProUGUI debugText; // 可选，显示调试信息
 
     [Header("Fallback CSV")]
     public TextAsset fallbackPlayerDataCsv;
@@ -257,6 +257,10 @@ public class LibraryManager : MonoBehaviour
             if (instance != null)
             {
                 instance.transform.SetParent(contentParent, false);
+
+                // 标记为来自库的项，并设置 CardDragHandler 为克隆拖拽模式
+                MarkAsLibraryItem(instance, cardId);
+
                 // 卡池需要显示卡片信息时，运行时强制激活信息面板；否则隐藏信息面板（与 DeckManager 行为不同）
                 if (forceShowCardInfo) ShowCardInfo(instance);
                 else HideCardInfo(instance);
@@ -275,6 +279,40 @@ public class LibraryManager : MonoBehaviour
             var c = contentParent.GetChild(i);
             if (Application.isPlaying) Destroy(c.gameObject); else DestroyImmediate(c.gameObject);
         }
+    }
+
+    // ========== 新增方法：标记为库项，并确保 CardDragHandler.createCloneOnDrag = true ==========
+    void MarkAsLibraryItem(GameObject instance, int cardId)
+    {
+        if (instance == null) return;
+
+        // 添加标记组件（便于在其它地方做判断）
+        var libMark = instance.GetComponent<LibraryItem>();
+        if (libMark == null) libMark = instance.AddComponent<LibraryItem>();
+        libMark.cardId = cardId;
+
+        // 确保有 CardDragHandler，并设置为在拖拽时创建 clone 的模式
+        var ch = instance.GetComponent<CardDragHandler>();
+        if (ch == null)
+        {
+            ch = instance.AddComponent<CardDragHandler>();
+        }
+        ch.cardId = cardId;
+
+        // 仅库项启用 createCloneOnDrag
+        ch.createCloneOnDrag = true;
+    }
+
+    // 兼容：当我们不知道 cardId（如从外部直接拖回 GameObject），也提供一个不带 cardId 的标记函数
+    void MarkAsLibraryItem(GameObject instance)
+    {
+        MarkAsLibraryItem(instance, -1);
+    }
+
+    // LibraryItem 标记类
+    public class LibraryItem : MonoBehaviour
+    {
+        public int cardId;
     }
 
     // ========== Instantiate helpers (与 DeckManager 一致) ==========
@@ -515,10 +553,13 @@ public class LibraryManager : MonoBehaviour
     {
         if (instance == null) return;
 
+        // 关键：如果这是拖拽生成的 clone，则跳过，不为其打开信息面板
+        if (IsDragClone(instance)) return;
+
         var infoNames = new[] {
-            "卡片信息", "CardInfo", "cardInfo", "InfoPanel", "Card_Detail",
-            "卡片详情", "DetailPanel", "Tooltip", "卡片信息面板"
-        };
+        "卡片信息", "CardInfo", "cardInfo", "InfoPanel", "Card_Detail",
+        "卡片详情", "DetailPanel", "Tooltip", "卡片信息面板"
+    };
 
         try
         {
@@ -528,7 +569,7 @@ public class LibraryManager : MonoBehaviour
                 var nm = t.name ?? "";
                 foreach (var name in infoNames)
                 {
-                    if (nm.IndexOf(name, StringComparison.OrdinalIgnoreCase) >= 0)
+                    if (nm.IndexOf(name, System.StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         t.gameObject.SetActive(true);
                         break;
@@ -552,6 +593,37 @@ public class LibraryManager : MonoBehaviour
             }
         }
         catch { }
+    }
+
+    // 判断是否为拖拽 clone：优先检测 DragCloneMarker 组件，其次兼容名字包含 "_DragClone"
+    bool IsDragClone(GameObject go)
+    {
+        if (go == null) return false;
+
+        // 优先检测你单独创建的 DragCloneMarker 组件
+        try
+        {
+            if (go.GetComponent<DragCloneMarker>() != null) return true;
+        }
+        catch { }
+
+        // 兼容：名字标记
+        var nm = go.name ?? "";
+        if (nm.IndexOf("_DragClone", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+
+        // 额外保险：检测任意组件名为 DragCloneMarker（防止命名空间差异）
+        try
+        {
+            foreach (var comp in go.GetComponents<Component>())
+            {
+                if (comp == null) continue;
+                if (string.Equals(comp.GetType().Name, "DragCloneMarker", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+        catch { }
+
+        return false;
     }
 
     // ========== 从 PlayerDataManager 获取卡片数据（尝试常见字段/方法） ==========
@@ -771,5 +843,34 @@ public class LibraryManager : MonoBehaviour
         {
             DebugLog($"LibraryManager: 返回卡片到库失败 id={cardId}");
         }
+    }
+
+    // ========== 兼容重载：接受 GameObject / Transform / CardDragHandler ==========
+    public void OnCardReturnedToLibrary(GameObject card)
+    {
+        if (card == null) return;
+
+        // 把对象放回库的 contentParent（不改变世界坐标上的显示方式）
+        if (contentParent != null)
+        {
+            card.transform.SetParent(contentParent, false);
+            card.transform.SetAsLastSibling();
+        }
+
+        // 标记为库项并隐藏信息
+        MarkAsLibraryItem(card);
+        HideCardInfo(card);
+    }
+
+    public void OnCardReturnedToLibrary(Transform t)
+    {
+        if (t == null) return;
+        OnCardReturnedToLibrary(t.gameObject);
+    }
+
+    public void OnCardReturnedToLibrary(CardDragHandler handler)
+    {
+        if (handler == null) return;
+        OnCardReturnedToLibrary(handler.gameObject);
     }
 }
