@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -18,7 +19,6 @@ public class SelectionManager : MonoBehaviour
     public float padY = 8f;
 
     [Header("Design sizing")]
-    // 卡牌在美术稿/设计稿中的尺寸（像 Inspector 上显示的设计尺寸，比如 220x220）
     public Vector2 cardDesignSize = new Vector2(220f, 220f);
     public enum DesignMatch { Width, Height, Max, Min }
     public DesignMatch designMatch = DesignMatch.Width;
@@ -35,14 +35,13 @@ public class SelectionManager : MonoBehaviour
     Camera overlayCamera;
 
     RectTransform activeSel;
-    RectTransform targetCard;
+    RectTransform targetCard; // 当前 activeSel 正在“指向”的卡（常态或 hover 临时）
 
     RectTransform selParentRect;
     Canvas selParentCanvas;
 
     bool selUsingCardSibling = false;
 
-    // 记录 selection 预制体实例的原始尺寸（local UI 单位）
     Vector2 selPrefabBaseSize = Vector2.zero;
 
     Transform selShowOriginalParent = null;
@@ -64,6 +63,15 @@ public class SelectionManager : MonoBehaviour
     int lastLoggedSelOrder = int.MinValue;
     float lastLogTime = 0f;
     const float EPS_POS = 0.5f;
+
+    // 兼容旧逻辑的临时 hover 实例（不常用）
+    RectTransform tempHoverSel;
+
+    // 临时覆盖（简单方案）：
+    // 当拖拽时我们可能会把 activeSel 暂时指向鼠标下的那个卡片（hovered）。
+    // tempOverridePrevTarget 保存被覆盖前的 targetCard（通常是正在被拖拽的卡）。
+    RectTransform tempOverridePrevTarget = null;
+    bool tempOverrideActive = false;
 
     void Awake()
     {
@@ -141,8 +149,9 @@ public class SelectionManager : MonoBehaviour
             {
                 if (selShowOriginalParent != null)
                 {
+                    // 先切父级（通常安全），但延迟设置 sibling 避免在父对象激活/停用过程中调用 SetSiblingIndex
                     activeSel.SetParent(selShowOriginalParent, false);
-                    activeSel.SetSiblingIndex(Mathf.Clamp(selShowOriginalSibling, 0, selShowOriginalParent.childCount));
+                    StartCoroutine(SafeSetSiblingIndexNextFrame(activeSel, selShowOriginalSibling));
                 }
                 else
                 {
@@ -158,6 +167,13 @@ public class SelectionManager : MonoBehaviour
                 selUsingCardSibling = false;
             }
         }
+
+        // 同时确保临时 hover 被销毁
+        HideHoverSelection();
+
+        // 清理任何临时覆盖记录
+        tempOverridePrevTarget = null;
+        tempOverrideActive = false;
     }
 
     public void AttachSelectionTo(Transform newParent, bool keepWorldPosition = true)
@@ -214,7 +230,10 @@ public class SelectionManager : MonoBehaviour
         activeSel.anchoredPosition = selOriginalAnchoredPos;
 
         if (selOriginalParent != null)
-            activeSel.SetSiblingIndex(Mathf.Clamp(selOriginalSibling, 0, selOriginalParent.childCount));
+        {
+            // 延迟设置 sibling，避免在父对象激活/停用过程中调用 SetSiblingIndex 导致错误
+            StartCoroutine(SafeSetSiblingIndexNextFrame(activeSel, selOriginalSibling));
+        }
 
         Canvas selCanvas = activeSel.GetComponent<Canvas>();
         if (selOriginalCanvas != null)
@@ -246,6 +265,33 @@ public class SelectionManager : MonoBehaviour
             UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(rt);
     }
 
+    // 延迟一帧再安全设置 siblingIndex（用于避免在父对象激活/停用流程中出错）
+    IEnumerator SafeSetSiblingIndexNextFrame(Transform child, int siblingIndex)
+    {
+        yield return null;
+
+        if (child == null) yield break;
+        var parent = child.parent;
+        if (parent == null) yield break;
+
+        // 如果父对象可见并且处于激活状态，直接设置；否则再等一帧尝试一次
+        if (parent.gameObject.activeInHierarchy)
+        {
+            child.SetSiblingIndex(Mathf.Clamp(siblingIndex, 0, parent.childCount));
+            yield break;
+        }
+
+        // 再等待一帧，如果父对象恢复激活则设置
+        yield return null;
+        if (child == null) yield break;
+        parent = child.parent;
+        if (parent == null) yield break;
+        if (parent.gameObject.activeInHierarchy)
+        {
+            child.SetSiblingIndex(Mathf.Clamp(siblingIndex, 0, parent.childCount));
+        }
+    }
+
     void EnsureActiveSelExists()
     {
         if (activeSel == null)
@@ -266,7 +312,6 @@ public class SelectionManager : MonoBehaviour
             var csf = activeSel.GetComponent<ContentSizeFitter>();
             if (csf != null) csf.enabled = false;
 
-            // 记录预制体基准尺寸（local rect 尺寸）
             selPrefabBaseSize = activeSel.rect.size;
 
             activeSel.anchorMin = activeSel.anchorMax = new Vector2(0.5f, 0.5f);
@@ -302,21 +347,17 @@ public class SelectionManager : MonoBehaviour
     {
         if (selRect == null || cardRect == null) return;
 
-        // sibling 模式：直接复制 card 的局部 transform，但尺寸按"预制体基准尺寸 * 设计比例"计算
         if (selUsingCardSibling && selRect.parent == cardRect.parent)
         {
             selRect.localScale = Vector3.one;
 
-            // match anchor/pivot to avoid anchor caused offsets
             selRect.anchorMin = cardRect.anchorMin;
             selRect.anchorMax = cardRect.anchorMax;
             selRect.pivot = cardRect.pivot;
 
-            // 计算卡牌当前“可视”尺寸（考虑 loss y scale）
             float cardVisW = cardRect.rect.width * cardRect.lossyScale.x;
             float cardVisH = cardRect.rect.height * cardRect.lossyScale.y;
 
-            // 计算基于设计稿的 scale
             float scaleX = cardDesignSize.x > 0f ? (cardVisW / cardDesignSize.x) : 1f;
             float scaleY = cardDesignSize.y > 0f ? (cardVisH / cardDesignSize.y) : 1f;
             float designScale = 1f;
@@ -328,13 +369,11 @@ public class SelectionManager : MonoBehaviour
                 case DesignMatch.Min: designScale = Mathf.Min(scaleX, scaleY); break;
             }
 
-            // 目标尺寸 = 预制体基准尺寸 * 设计 scale * width/heightScale
             float targetW = selPrefabBaseSize.x * designScale * widthScale;
             float targetH = selPrefabBaseSize.y * designScale * heightScale;
             selRect.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, targetW);
             selRect.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, targetH);
 
-            // 直接复制 localPosition（并可加 manualOffset）
             Vector3 finalLocal = cardRect.localPosition + new Vector3(manualOffset.x, manualOffset.y, 0f);
             if (pixelRound) finalLocal = new Vector3(Mathf.Round(finalLocal.x), Mathf.Round(finalLocal.y), Mathf.Round(finalLocal.z));
             selRect.localPosition = finalLocal;
@@ -353,7 +392,6 @@ public class SelectionManager : MonoBehaviour
             return;
         }
 
-        // 非 sibling（保留原来逻辑）
         selRect.localScale = Vector3.one;
         selRect.pivot = new Vector2(0.5f, 0.5f);
         selRect.anchorMin = selRect.anchorMax = new Vector2(0.5f, 0.5f);
@@ -429,9 +467,56 @@ public class SelectionManager : MonoBehaviour
         }
     }
 
+    // ========== 旧的临时 hover（向后兼容）==========
+    public void ShowHoverSelection(RectTransform targetCard)
+    {
+        if (selectionPrefab == null || targetCard == null || overlayRect == null) return;
+
+        if (tempHoverSel != null)
+        {
+            Destroy(tempHoverSel.gameObject);
+            tempHoverSel = null;
+        }
+
+        GameObject go = Instantiate(selectionPrefab.gameObject, overlayRect, false);
+        go.name = selectionPrefab.gameObject.name + "_hover";
+        tempHoverSel = go.GetComponent<RectTransform>();
+
+        var cg = tempHoverSel.GetComponent<CanvasGroup>();
+        if (cg == null) cg = tempHoverSel.gameObject.AddComponent<CanvasGroup>();
+        cg.blocksRaycasts = false;
+        cg.alpha = 0.85f;
+
+        var arf = tempHoverSel.GetComponent<AspectRatioFitter>();
+        if (arf != null) arf.enabled = false;
+        var csf = tempHoverSel.GetComponent<ContentSizeFitter>();
+        if (csf != null) csf.enabled = false;
+        var le = tempHoverSel.GetComponent<LayoutElement>();
+        if (le != null) le.ignoreLayout = true;
+
+        UpdateSelectionTransform(tempHoverSel, targetCard);
+        tempHoverSel.gameObject.SetActive(true);
+    }
+
+    public void HideHoverSelection()
+    {
+        if (tempHoverSel != null)
+        {
+            Destroy(tempHoverSel.gameObject);
+            tempHoverSel = null;
+        }
+    }
+    // ==============================================
+
     void OnDestroy()
     {
         if (Instance == this) Instance = null;
+
+        if (tempHoverSel != null)
+        {
+            Destroy(tempHoverSel.gameObject);
+            tempHoverSel = null;
+        }
     }
 
     void ConfigureSelectionCanvasRelativeToCard(RectTransform card)
@@ -533,6 +618,7 @@ public class SelectionManager : MonoBehaviour
             if (usedCardSibling)
             {
                 int cardIndex = card.GetSiblingIndex();
+                // 这里保持原逻辑：直接设置 sibling（一般在正常显示流程中安全）
                 activeSel.SetSiblingIndex(Mathf.Clamp(cardIndex, 0, desiredParent.childCount));
 
                 if (selCanvas != null)
@@ -547,12 +633,10 @@ public class SelectionManager : MonoBehaviour
                     }
                 }
 
-                // 将 selection 的 anchor/pivot 与 card 匹配（位置一致），但尺寸按设计比例基于预制体基准尺寸进行缩放
                 activeSel.anchorMin = card.anchorMin;
                 activeSel.anchorMax = card.anchorMax;
                 activeSel.pivot = card.pivot;
 
-                // 先把大小设为预制基准（UpdateSelectionTransform 会再计算）
                 activeSel.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, selPrefabBaseSize.x);
                 activeSel.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, selPrefabBaseSize.y);
 
@@ -610,5 +694,62 @@ public class SelectionManager : MonoBehaviour
         var cg = activeSel.GetComponent<CanvasGroup>();
         if (cg == null) cg = activeSel.gameObject.AddComponent<CanvasGroup>();
         cg.blocksRaycasts = false;
+    }
+
+    // ========== 新增：临时 hover 覆盖接口 ==========
+    // 将 selection 临时指向 hovered（保存之前的 targetCard）
+    public void SetHoverOverride(RectTransform hovered)
+    {
+        if (hovered == null)
+        {
+            ClearHoverOverride();
+            return;
+        }
+
+        // 如果还没创建 activeSel，让它存在（后面 ShowFor 会配置）
+        EnsureActiveSelExists();
+
+        // 如果当前已有临时覆盖记录，直接切换到新的 hovered（不覆盖原始保存）
+        if (!tempOverrideActive)
+        {
+            tempOverridePrevTarget = targetCard; // 保存当前的真实 target（通常是拖拽对象）
+            tempOverrideActive = true;
+        }
+
+        // 切换显示到 hovered
+        ShowFor(hovered);
+    }
+
+    // 恢复到被覆盖前的 target（通常拖拽卡），或隐藏
+    public void ClearHoverOverride()
+    {
+        if (!tempOverrideActive)
+        {
+            // 没有临时覆盖：不做任何事（但确保 activeSel 仍在跟随 targetCard）
+            if (targetCard != null)
+            {
+                ShowFor(targetCard);
+            }
+            return;
+        }
+
+        if (tempOverridePrevTarget != null)
+        {
+            ShowFor(tempOverridePrevTarget);
+        }
+        else
+        {
+            Hide();
+        }
+
+        tempOverridePrevTarget = null;
+        tempOverrideActive = false;
+    }
+    // ==============================================
+
+    // 旧兼容方法（用于外部清空 hover 栈）
+    public void ClearAllHoverEntries()
+    {
+        ClearHoverOverride();
     }
 }

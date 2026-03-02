@@ -1,19 +1,21 @@
+using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
 
+[RequireComponent(typeof(RectTransform))]
 public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDragHandler
 {
-    [Header("Card identity (restored for external callers)")]
-    public int cardId;               // <--- 恢复这个字段，外部脚本可直接访问
-    public int CardId => cardId;     // 只读属性（兼容其它访问方式）
+    [Header("Card identity (optional)")]
+    public int cardId;
+    public int CardId => cardId;
 
-    [Header("Optional: 指定拖拽时放置卡片的 root（若为空会自动查找父 Canvas 的 transform）")]
+    [Header("Drag root (optional). If null, will use parent Canvas transform)")]
     public Transform dragRoot;
 
-    [Header("When true, attach selection to dragRoot during drag to avoid masking/sorting issues")]
+    [Header("Whether to attach selection to dragRoot during drag")]
     public bool attachSelectionToDragRoot = true;
 
-    // 当前正在拖拽的卡片（全局便于其它系统查询）
     public static CardDragHandler currentDragging;
 
     RectTransform rectTransform;
@@ -50,9 +52,8 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
         originalSiblingIndex = transform.GetSiblingIndex();
 
         if (cg == null) cg = gameObject.AddComponent<CanvasGroup>();
-        cg.blocksRaycasts = false;
+        cg.blocksRaycasts = false; // 让射线穿透到下层
 
-        // 若 inspector 没指定 dragRoot，尝试重新查找父 Canvas
         if (dragRoot == null)
         {
             rootCanvas = GetComponentInParent<Canvas>();
@@ -63,11 +64,10 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
             }
         }
 
-        // 把卡片移到 root（保持世界位置）
         if (dragRoot != null)
             transform.SetParent(dragRoot, true);
 
-        // 计算 pointerOffset（相对于 canvasRect 的 anchoredPosition 偏移）
+        // 计算偏移（以便鼠标抓在卡片任意位置时看起来自然）
         Vector2 localPointerPos;
         var cam = eventData.pressEventCamera;
         if (canvasRect != null && RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, eventData.position, cam, out localPointerPos))
@@ -79,14 +79,21 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
             pointerOffset = Vector2.zero;
         }
 
-        // 触发 SelectionManager：可选把 selection 附着到 dragRoot，随后显示 overlay
         if (SelectionManager.Instance != null)
         {
+            SelectionManager.Instance.ClearAllHoverEntries();
+
             if (attachSelectionToDragRoot && dragRoot != null)
             {
                 SelectionManager.Instance.AttachSelectionTo(dragRoot, true);
             }
-            SelectionManager.Instance.ShowFor(rectTransform);
+
+            // 一开始外框指向被拖拽的卡
+            SelectionManager.Instance.SetHoverOverride(rectTransform);
+
+            // 确保 ordering：先把 selection 放到最后，再把拖拽卡放到最后 -> 卡片在外框之上
+            TrySafeBringToTop(SelectionManager.Instance.ActiveSelection);
+            TrySafeBringToTop(transform);
         }
     }
 
@@ -101,10 +108,54 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
         {
             rectTransform.anchoredPosition = localPointerPos + pointerOffset;
 
-            // 立即同步 selection 的 transform（防止不跟随或滞后）
+            // 尽量同步外框位置（如果 selection 仍指向拖拽卡）
             if (SelectionManager.Instance != null && SelectionManager.Instance.ActiveSelection != null)
             {
                 SelectionManager.Instance.UpdateSelectionTransform(SelectionManager.Instance.ActiveSelection, rectTransform);
+            }
+        }
+
+        // 使用 EventSystem.RaycastAll 检测鼠标下的 UI（排除自己）
+        if (EventSystem.current != null && SelectionManager.Instance != null)
+        {
+            PointerEventData ped = new PointerEventData(EventSystem.current);
+            ped.position = eventData.position;
+            List<RaycastResult> results = new List<RaycastResult>();
+            EventSystem.current.RaycastAll(ped, results);
+
+            RectTransform hoveredCard = null;
+            foreach (var r in results)
+            {
+                if (r.gameObject == null) continue;
+
+                // 跳过自身（拖拽的卡片），因为我们要找下面的卡
+                var handler = r.gameObject.GetComponentInParent<CardDragHandler>();
+                if (handler != null)
+                {
+                    if (handler == this) continue; // 跳过自己
+                    hoveredCard = handler.GetComponent<RectTransform>();
+                    break;
+                }
+
+                // 如果卡片用不同脚本标识（比如 CardComponent），可以在此处改为 GetComponentInParent<CardComponent>()
+            }
+
+            if (hoveredCard != null)
+            {
+                // 当检测到其它卡片时，把外框临时指向它
+                SelectionManager.Instance.SetHoverOverride(hoveredCard);
+
+                // ordering: selection 下，拖拽卡在上
+                TrySafeBringToTop(SelectionManager.Instance.ActiveSelection);
+                TrySafeBringToTop(transform);
+            }
+            else
+            {
+                // 没有命中任何卡片 -> 显式把外框指回当前拖拽的卡片（而不是 ClearHoverOverride）
+                SelectionManager.Instance.SetHoverOverride(rectTransform);
+
+                TrySafeBringToTop(SelectionManager.Instance.ActiveSelection);
+                TrySafeBringToTop(transform);
             }
         }
     }
@@ -115,7 +166,7 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
 
         if (cg != null) cg.blocksRaycasts = true;
 
-        // 如果卡片当前仍在 dragRoot，则把它放回原父级（常规恢复逻辑）
+        // 把卡片放回原父级（如果仍在 dragRoot）
         if (transform.parent == dragRoot)
         {
             if (originalParent != null)
@@ -125,30 +176,56 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
             }
         }
 
-        // 隐藏 SelectionManager 的 overlay，并尝试恢复 selection 的原始附着（若之前用 AttachSelectionTo）
         if (SelectionManager.Instance != null)
         {
+            SelectionManager.Instance.ClearAllHoverEntries();
             SelectionManager.Instance.Hide();
             SelectionManager.Instance.RestoreSelection();
         }
     }
 
-    // 外部放置逻辑可调用：把卡片放到指定父级（比如 drop area），并让 SelectionManager 隐藏 overlay
+    // 如果放到某个 drop area（外部调用）
     public void OnDroppedTo(Transform dropParent)
     {
         if (dropParent == null) dropParent = originalParent;
         transform.SetParent(dropParent, false);
         if (cg != null) cg.blocksRaycasts = true;
 
-        // 可重置位置/旋转/缩放以适应放置点
         rectTransform.anchoredPosition = Vector2.zero;
         rectTransform.localScale = Vector3.one;
         rectTransform.localRotation = Quaternion.identity;
 
         if (SelectionManager.Instance != null)
         {
+            SelectionManager.Instance.ClearAllHoverEntries();
             SelectionManager.Instance.Hide();
             SelectionManager.Instance.RestoreSelection();
         }
+    }
+
+    void OnDisable()
+    {
+        if (currentDragging == this) currentDragging = null;
+        if (SelectionManager.Instance != null)
+        {
+            SelectionManager.Instance.ClearAllHoverEntries();
+            SelectionManager.Instance.Hide();
+            SelectionManager.Instance.RestoreSelection();
+        }
+    }
+
+    void OnDestroy()
+    {
+        if (currentDragging == this) currentDragging = null;
+    }
+
+    // 把 transform 放到父级最后（安全检查父级是否激活）
+    void TrySafeBringToTop(Transform t)
+    {
+        if (t == null || t.parent == null) return;
+        if (!t.parent.gameObject.activeInHierarchy) return;
+
+        // 有时 SetAsLastSibling 在父对象激活/停用流程里会抛错，已经做了 activeInHierarchy 保护
+        t.SetAsLastSibling();
     }
 }
