@@ -26,7 +26,6 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
     public Vector2 fallbackCloneSize = new Vector2(220f, 220f); // 当无法计算时的回退尺寸
 
     [Header("Info-hide settings for clones")]
-    // 匹配并隐藏这些关键字对应的子对象（忽略大小写、部分匹配）
     public string[] infoNameTokens = new[] { "卡片信息", "CardInfo", "cardInfo", "InfoPanel", "Card_Detail", "卡片详情", "DetailPanel", "Tooltip", "卡片信息面板" };
     [Tooltip("在创建克隆后重复强制隐藏信息面板的帧数（防止其它脚本在后续帧打开）")]
     public int enforceHideFrames = 3;
@@ -45,6 +44,9 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
     GameObject dragCloneGO = null;
     RectTransform activeDragRect = null;   // the rect that is actually moved during dragging (either this.rectTransform or clone)
     bool usingClone = false;
+
+    // 公开原始父级，供 DropZone 构造 payload 使用（BeginDrag 时已保存 originalParent）
+    public Transform OriginalParent => originalParent;
 
     void Awake()
     {
@@ -68,6 +70,7 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
     {
         currentDragging = this;
 
+        // 记录原始父级（用于 Drop 时判断来源 / 恢复）
         originalParent = transform.parent;
         originalSiblingIndex = transform.GetSiblingIndex();
 
@@ -89,14 +92,14 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
             dragCloneGO = Instantiate(gameObject);
             dragCloneGO.name = gameObject.name + "_DragClone";
 
-            // 立即为克隆添加标记组件（你已创建 DragCloneMarker.cs）
+            // 立即为克隆添加标记组件（你可选添加 DragCloneMarker）
             try
             {
                 dragCloneGO.AddComponent<DragCloneMarker>();
             }
             catch
             {
-                // 如果项目中未包含 DragCloneMarker（极少见），则忽略，不会阻塞后续逻辑
+                // ignore if marker type isn't present
             }
 
             // 立即隐藏克隆中的信息面板相关子对象（不会禁用任何脚本）
@@ -109,7 +112,7 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
             if (dragRoot != null)
                 dragCloneGO.transform.SetParent(dragRoot, false);
 
-            // Disable its CardDragHandler to avoid duplicate behavior
+            // Disable its CardDragHandler to avoid duplicate behavior (will be re-enabled by DropZone when accepted)
             var cd = dragCloneGO.GetComponent<CardDragHandler>();
             if (cd != null) cd.enabled = false;
 
@@ -151,9 +154,10 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
                 pointerOffset = Vector2.zero;
             }
 
-            // keep original's raycast enabled (original remains interactive/hoverable in library)
+            // IMPORTANT: Don't let the ORIGINAL block raycasts while dragging a clone.
+            // That lets the pointer hit underlying drop zones.
             if (cg == null) cg = gameObject.AddComponent<CanvasGroup>();
-            cg.blocksRaycasts = true;
+            cg.blocksRaycasts = false;
         }
         else
         {
@@ -268,26 +272,62 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
     {
         if (currentDragging == this) currentDragging = null;
 
+        // 先尝试让 DragDropManager 消费 pending drop（由 DropZone 决定是否接受）
+        bool accepted = false;
+        if (DragDropManager.Instance != null)
+        {
+            // 传入 dragCloneGO（可能为 null），DropZone.OnDropAccept 将负责接管 clone 或处理原件
+            try
+            {
+                accepted = DragDropManager.Instance.ConsumePendingDrop(this, dragCloneGO, eventData);
+            }
+            catch
+            {
+                accepted = false;
+            }
+        }
+
         if (usingClone)
         {
-            if (dragCloneGO != null)
+            // 无论是否 accepted，都需要恢复原始对象的 raycast 行为
+            if (cg == null) cg = GetComponent<CanvasGroup>();
+            if (cg != null) cg.blocksRaycasts = true;
+
+            if (!accepted)
             {
-                Destroy(dragCloneGO);
-                dragCloneGO = null;
+                // 未被接受 -> 销毁 clone（原对象保留在原地）
+                if (dragCloneGO != null)
+                {
+                    Destroy(dragCloneGO);
+                    dragCloneGO = null;
+                }
+            }
+            else
+            {
+                // 被接受 -> DropZone 已经接管 clone 或做了其它处理，不在这里销毁
+                // 注意：DropZone 可能已经把 clone 作为最终 go 放入容器，并且需要确保它有 CardDragHandler 等
             }
             usingClone = false;
         }
         else
         {
-            if (cg != null) cg.blocksRaycasts = true;
-
-            if (transform.parent == dragRoot)
+            // 非 clone 情形（移动原对象）
+            if (!accepted)
             {
-                if (originalParent != null)
+                // 未被接受时，恢复原 parent / siblingIndex
+                if (cg != null) cg.blocksRaycasts = true;
+                if (transform.parent == dragRoot)
                 {
-                    transform.SetParent(originalParent, false);
-                    transform.SetSiblingIndex(Mathf.Clamp(originalSiblingIndex, 0, originalParent.childCount));
+                    if (originalParent != null)
+                    {
+                        transform.SetParent(originalParent, false);
+                        transform.SetSiblingIndex(Mathf.Clamp(originalSiblingIndex, 0, originalParent.childCount));
+                    }
                 }
+            }
+            else
+            {
+                // 被接受 -> DropZone 的 OnDropAccept 应该已经处理 parent/transform 等
             }
         }
 
@@ -312,6 +352,10 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
                 dragCloneGO = null;
             }
             usingClone = false;
+
+            // ensure original becomes interactive again
+            if (cg == null) cg = GetComponent<CanvasGroup>();
+            if (cg != null) cg.blocksRaycasts = true;
         }
         else
         {
@@ -341,6 +385,10 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
             SelectionManager.Instance.Hide();
             SelectionManager.Instance.RestoreSelection();
         }
+
+        // Make sure if component gets disabled mid-drag, we restore blocking so UI isn't left unresponsive
+        if (cg == null) cg = GetComponent<CanvasGroup>();
+        if (cg != null) cg.blocksRaycasts = true;
     }
 
     void OnDestroy()

@@ -135,7 +135,6 @@ GameObject:
   - component: {fileID: 35158260}
   - component: {fileID: 35158261}
   - component: {fileID: 35158262}
-  - component: {fileID: 35158263}
   m_Layer: 5
   m_Name: "\u5361\u7EC4"
   m_TagString: Untagged
@@ -183,7 +182,7 @@ MonoBehaviour:
   m_StartCorner: 0
   m_StartAxis: 0
   m_CellSize: {x: 220, y: 220}
-  m_Spacing: {x: -30, y: 40}
+  m_Spacing: {x: -10, y: 40}
   m_Constraint: 1
   m_ConstraintCount: 5
 --- !u!114 &35158262
@@ -200,20 +199,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.ContentSizeFitter
   m_HorizontalFit: 0
   m_VerticalFit: 2
---- !u!114 &35158263
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 35158259}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 75e0fce8e4ff9594cb91c2541e76743a, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::DeckDropZone
-  deckContainer: {fileID: 35158260}
-  tempModel: {fileID: 11400000, guid: 0b556644a9b8c4e42823680138ed25de, type: 2}
 --- !u!1 &127635736
 GameObject:
   m_ObjectHideFlags: 0
@@ -435,6 +420,10 @@ PrefabInstance:
       value: 14
       objectReference: {fileID: 0}
     - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
+      propertyPath: m_Enabled
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 7193509823709973139, guid: 85e9f7d63ad3a874cb352beee0323448, type: 3}
       propertyPath: clampMargin
       value: 8
       objectReference: {fileID: 0}
@@ -622,6 +611,7 @@ MonoBehaviour:
   libContainer: {fileID: 501825831}
   libraryManager: {fileID: 1657943282}
   tempModel: {fileID: 11400000, guid: 0b556644a9b8c4e42823680138ed25de, type: 2}
+  libraryCardPrefab: {fileID: 0}
 --- !u!1 &542531905
 GameObject:
   m_ObjectHideFlags: 0
@@ -1355,8 +1345,9 @@ GameObject:
   - component: {fileID: 1061294491}
   - component: {fileID: 1061294493}
   - component: {fileID: 1061294492}
+  - component: {fileID: 1061294494}
   m_Layer: 5
-  m_Name: Image
+  m_Name: "\u63A5\u6536\u6620\u5C04"
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -1419,6 +1410,21 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1061294490}
   m_CullTransparentMesh: 1
+--- !u!114 &1061294494
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1061294490}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 75e0fce8e4ff9594cb91c2541e76743a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::DeckDropZone
+  deckContainer: {fileID: 35158260}
+  tempModel: {fileID: 11400000, guid: 0b556644a9b8c4e42823680138ed25de, type: 2}
+  deckCardPrefab: {fileID: 0}
 --- !u!1001 &1093396569
 PrefabInstance:
   m_ObjectHideFlags: 0

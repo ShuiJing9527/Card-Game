@@ -1,7 +1,5 @@
-using UnityEditor.Experimental.GraphView;
 using UnityEngine;
 using UnityEngine.EventSystems;
-using UnityEngine.UI;
 
 /// <summary>
 /// DeckDropZone - 接收拖拽并在 DragDropManager 回调中完成放置与模型更新
@@ -15,6 +13,10 @@ public class DeckDropZone : MonoBehaviour, IDropHandler, IDropTarget
     [Header("Model")]
     [Tooltip("临时卡组数据模型（放置时会调用 AddCard ）")]
     public DeckTempModel tempModel;
+
+    [Header("Optional")]
+    [Tooltip("用于在放入卡组时实例化的卡片 prefab（若为空则尝试重用 dragClone 或 originalGameObject）")]
+    public GameObject deckCardPrefab;
 
     // payload 的明确类型，便于扩展和序列化调试
     public class DropPayload
@@ -47,7 +49,7 @@ public class DeckDropZone : MonoBehaviour, IDropHandler, IDropTarget
         var cardHandler = draggedGo.GetComponent<CardDragHandler>();
         if (cardHandler == null)
         {
-            // 不是卡片则忽略（或你可以改为支持其它类型）
+            // 不是卡片则忽略
             return;
         }
 
@@ -60,7 +62,7 @@ public class DeckDropZone : MonoBehaviour, IDropHandler, IDropTarget
         var payload = new DropPayload
         {
             cardId = cardHandler.cardId,
-            from = draggedGo.transform.parent,
+            from = cardHandler.OriginalParent, // 使用 CardDragHandler 记录的原始父级
             originalGameObject = draggedGo
         };
 
@@ -98,43 +100,33 @@ public class DeckDropZone : MonoBehaviour, IDropHandler, IDropTarget
         GameObject finalGo = null;
         if (dragClone != null)
         {
+            // 将 clone 放入 deck 容器并恢复交互与所需组件
             finalGo = dragClone;
             finalGo.transform.SetParent(parentRt, false);
-            // 可选：重置本地 transform
-            RectTransform rt = finalGo.GetComponent<RectTransform>();
-            if (rt != null)
-            {
-                rt.anchoredPosition3D = Vector3.zero;
-                rt.localScale = Vector3.one;
-            }
-
-            // 恢复交互能力
-            var cg = finalGo.GetComponent<CanvasGroup>();
-            if (cg != null) cg.blocksRaycasts = true;
-
-            // 确保有 CardDragHandler（以便后续还可以拖拽）
-            var ch = finalGo.GetComponent<CardDragHandler>();
-            if (ch == null)
-            {
-                ch = finalGo.AddComponent<CardDragHandler>();
-                ch.cardId = id;
-            }
-            else
-            {
-                ch.cardId = id;
-            }
+            ResetRectTransform(finalGo);
+            RestoreCanvasGroup(finalGo);
+            EnsureCardDragHandler(finalGo, id, asDeckCard: true);
         }
         else if (dropPayload.originalGameObject != null)
         {
-            // 如果没有 clone，则直接把原对象移动进容器（注意这在某些 Drag 实现里可能不是期望行为）
-            finalGo = dropPayload.originalGameObject;
-            finalGo.transform.SetParent(parentRt, false);
-            var cg = finalGo.GetComponent<CanvasGroup>();
-            if (cg != null) cg.blocksRaycasts = true;
+            // 如果存在 deckCardPrefab，优先 Instantiate 一份 deck 专用 prefab（避免直接重用库的原件）
+            if (deckCardPrefab != null)
+            {
+                finalGo = Instantiate(deckCardPrefab, parentRt, false);
+                EnsureCardDragHandler(finalGo, id, asDeckCard: true);
+            }
+            else
+            {
+                // 没有 prefab，则移动原对象到 deck 容器
+                finalGo = dropPayload.originalGameObject;
+                finalGo.transform.SetParent(parentRt, false);
+                ResetRectTransform(finalGo);
+                RestoreCanvasGroup(finalGo);
+                EnsureCardDragHandler(finalGo, id, asDeckCard: true);
+            }
         }
         else
         {
-            // 这里可以选择 Instantiate 一个卡片 prefab（如果你有 prefab 的引用）
             Debug.LogWarning("[DeckDropZone] Neither dragClone nor originalGameObject provided. No visual card created.");
         }
 
@@ -152,5 +144,44 @@ public class DeckDropZone : MonoBehaviour, IDropHandler, IDropTarget
         // e.g. finalGo.transform.SetSiblingIndex(desiredIndex);
 
         return true; // accept
+    }
+
+    // 恢复 CanvasGroup 的交互
+    private void RestoreCanvasGroup(GameObject go)
+    {
+        var cg = go.GetComponent<CanvasGroup>();
+        if (cg != null) cg.blocksRaycasts = true;
+    }
+
+    // 确保有 CardDragHandler 以便后续还能拖动（并设置 cardId）
+    private void EnsureCardDragHandler(GameObject go, int id, bool asDeckCard = false)
+    {
+        var ch = go.GetComponent<CardDragHandler>();
+        if (ch == null)
+        {
+            ch = go.AddComponent<CardDragHandler>();
+            ch.cardId = id;
+        }
+        else
+        {
+            ch.cardId = id;
+        }
+
+        // 卡组内的卡通常直接移动原件（从卡组拖出时会移动原件），所以建议 createCloneOnDrag = false
+        if (asDeckCard)
+        {
+            ch.createCloneOnDrag = false;
+        }
+    }
+
+    // 可选：重置 RectTransform 位置/缩放以便在 LayoutGroup 中正确显示
+    private void ResetRectTransform(GameObject go)
+    {
+        var rt = go.GetComponent<RectTransform>();
+        if (rt != null)
+        {
+            rt.anchoredPosition3D = Vector3.zero;
+            rt.localScale = Vector3.one;
+        }
     }
 }

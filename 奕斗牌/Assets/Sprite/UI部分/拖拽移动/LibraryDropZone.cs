@@ -17,6 +17,10 @@ public class LibraryDropZone : MonoBehaviour, IDropHandler, IDropTarget
     [Tooltip("临时卡组数据（放回库时要从临时 Deck 中移除）")]
     public DeckTempModel tempModel;
 
+    [Header("Optional")]
+    [Tooltip("如果希望放回库时用特定 prefab 显示，可以指定；否则会尝试重用 dragClone 或 originalGameObject")]
+    public GameObject libraryCardPrefab;
+
     // 与 DeckDropZone 保持一致的 payload 类型（项目内可抽取为公用类型）
     public class DropPayload
     {
@@ -56,7 +60,7 @@ public class LibraryDropZone : MonoBehaviour, IDropHandler, IDropTarget
         var payload = new DropPayload
         {
             cardId = cardHandler.cardId,
-            from = draggedGo.transform.parent,
+            from = cardHandler.OriginalParent, // 使用 CardDragHandler 记录的原始父级
             originalGameObject = draggedGo
         };
 
@@ -107,12 +111,35 @@ public class LibraryDropZone : MonoBehaviour, IDropHandler, IDropTarget
         }
         else if (dropPayload.originalGameObject != null)
         {
-            // 没有 clone，直接把原对象移动回库（可能是来自 Deck 的对象）
-            var orig = dropPayload.originalGameObject;
-            orig.transform.SetParent(parentRt, false);
-            ResetRectTransform(orig);
-            RestoreCanvasGroup(orig);
-            EnsureCardDragHandler(orig, id);
+            // 没有 clone，处理原始对象
+            if (originIsLibrary)
+            {
+                // 原本就在库里，直接确保其 parent/状态正确
+                var orig = dropPayload.originalGameObject;
+                orig.transform.SetParent(parentRt, false);
+                ResetRectTransform(orig);
+                RestoreCanvasGroup(orig);
+                EnsureCardDragHandler(orig, id);
+            }
+            else
+            {
+                // 来自 Deck：优先使用 libraryCardPrefab（如果提供），否则直接把原对象移回库
+                if (libraryCardPrefab != null)
+                {
+                    var go = Instantiate(libraryCardPrefab, parentRt, false);
+                    EnsureCardDragHandler(go, id);
+                    // 销毁原来的 deck 实例（如果原对象是 deck 内实例）
+                    Object.Destroy(dropPayload.originalGameObject);
+                }
+                else
+                {
+                    var orig = dropPayload.originalGameObject;
+                    orig.transform.SetParent(parentRt, false);
+                    ResetRectTransform(orig);
+                    RestoreCanvasGroup(orig);
+                    EnsureCardDragHandler(orig, id);
+                }
+            }
         }
         else
         {
@@ -177,6 +204,9 @@ public class LibraryDropZone : MonoBehaviour, IDropHandler, IDropTarget
         {
             ch.cardId = id;
         }
+
+        // 库内的卡通常保留 createCloneOnDrag = true（若希望库项拖动时创建 clone）
+        ch.createCloneOnDrag = true;
     }
 
     // 可选：重置 RectTransform 位置/缩放以便在 LayoutGroup 中正确显示
