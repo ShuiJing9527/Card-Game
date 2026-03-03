@@ -149,13 +149,21 @@ public class DeckDropZone : MonoBehaviour, IDropHandler, IDropTarget
     // 恢复 CanvasGroup 的交互
     private void RestoreCanvasGroup(GameObject go)
     {
+        if (go == null) return;
         var cg = go.GetComponent<CanvasGroup>();
-        if (cg != null) cg.blocksRaycasts = true;
+        if (cg != null)
+        {
+            cg.blocksRaycasts = true;
+            cg.interactable = true; // 确保交互可用
+            cg.alpha = 1f;
+        }
     }
 
     // 确保有 CardDragHandler 以便后续还能拖动（并设置 cardId）
     private void EnsureCardDragHandler(GameObject go, int id, bool asDeckCard = false)
     {
+        if (go == null) return;
+
         var ch = go.GetComponent<CardDragHandler>();
         if (ch == null)
         {
@@ -167,11 +175,21 @@ public class DeckDropZone : MonoBehaviour, IDropHandler, IDropTarget
             ch.cardId = id;
         }
 
-        // 卡组内的卡通常直接移动原件（从卡组拖出时会移动原件），所以建议 createCloneOnDrag = false
+        // 如果之前被禁用（例如 clone 创建时禁用），这里要重新启用
+        if (!ch.enabled) ch.enabled = true;
+
+        // 确保移回卡组后的默认拖拽策略
         if (asDeckCard)
         {
             ch.createCloneOnDrag = false;
         }
+
+        // 确保 CanvasGroup 恢复交互（若没有就添加一个）
+        var cg = go.GetComponent<CanvasGroup>();
+        if (cg == null) cg = go.AddComponent<CanvasGroup>();
+        cg.blocksRaycasts = true;
+        cg.interactable = true;
+        cg.alpha = 1f;
     }
 
     // 可选：重置 RectTransform 位置/缩放以便在 LayoutGroup 中正确显示

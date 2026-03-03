@@ -68,6 +68,21 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
 
     public void OnBeginDrag(PointerEventData eventData)
     {
+        // 防御性初始化（以防 Awake 未被调用或字段被意外清空）
+        if (rectTransform == null) rectTransform = GetComponent<RectTransform>();
+        if (cg == null) cg = GetComponent<CanvasGroup>();
+        if (rootCanvas == null) rootCanvas = GetComponentInParent<Canvas>();
+        if (rootCanvas != null && dragRoot == null)
+        {
+            dragRoot = rootCanvas.transform;
+            canvasRect = dragRoot as RectTransform;
+        }
+        else if (dragRoot != null && canvasRect == null)
+        {
+            canvasRect = dragRoot as RectTransform;
+            if (rootCanvas == null) rootCanvas = dragRoot.GetComponentInParent<Canvas>();
+        }
+
         currentDragging = this;
 
         // 记录原始父级（用于 Drop 时判断来源 / 恢复）
@@ -88,84 +103,186 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
                 }
             }
 
-            // Instantiate visual clone
-            dragCloneGO = Instantiate(gameObject);
-            dragCloneGO.name = gameObject.name + "_DragClone";
-
-            // 立即为克隆添加标记组件（你可选添加 DragCloneMarker）
+            // Instantiate visual clone（容错）
             try
             {
-                dragCloneGO.AddComponent<DragCloneMarker>();
+                dragCloneGO = Instantiate(gameObject);
             }
-            catch
+            catch (System.Exception ex)
             {
-                // ignore if marker type isn't present
-            }
-
-            // 立即隐藏克隆中的信息面板相关子对象（不会禁用任何脚本）
-            DisableInfoChildInClone(dragCloneGO);
-
-            // 在随后若干帧再次强制隐藏，以防 OnEnable/Start 中被打开
-            StartCoroutine(EnsureInfoRemainsHidden(dragCloneGO, enforceHideFrames));
-
-            // Put clone under dragRoot WITHOUT preserving world position
-            if (dragRoot != null)
-                dragCloneGO.transform.SetParent(dragRoot, false);
-
-            // Disable its CardDragHandler to avoid duplicate behavior (will be re-enabled by DropZone when accepted)
-            var cd = dragCloneGO.GetComponent<CardDragHandler>();
-            if (cd != null) cd.enabled = false;
-
-            // Clone should not block raycasts (so raycasts hit underlying UI)
-            var cloneCg = dragCloneGO.GetComponent<CanvasGroup>();
-            if (cloneCg == null) cloneCg = dragCloneGO.AddComponent<CanvasGroup>();
-            cloneCg.blocksRaycasts = false;
-            cloneCg.interactable = false;
-
-            // active drag rect is the clone's rect transform
-            activeDragRect = dragCloneGO.GetComponent<RectTransform>();
-
-            // Normalize anchors/pivot so anchoredPosition maps predictably to screen/local coords
-            if (activeDragRect != null)
-            {
-                activeDragRect.pivot = new Vector2(0.5f, 0.5f);
-                activeDragRect.anchorMin = activeDragRect.anchorMax = new Vector2(0.5f, 0.5f);
-
-                // 强制重建布局以便计算 preferred size（若存在 LayoutGroup / ContentSizeFitter）
-                LayoutRebuilder.ForceRebuildLayoutImmediate(activeDragRect);
-
-                // 计算合适尺寸（自动 + 容错），然后 clamp 到 min/max
-                Vector2 calcSize = CalculateCloneSize(activeDragRect, rootCanvas, fallbackCloneSize);
-                float clampedW = Mathf.Clamp(calcSize.x, minCloneSize.x, maxCloneSize.x);
-                float clampedH = Mathf.Clamp(calcSize.y, minCloneSize.y, maxCloneSize.y);
-                activeDragRect.sizeDelta = new Vector2(clampedW, clampedH);
+                Debug.LogWarning($"[CardDragHandler] Instantiate failed: {ex}. Falling back to moving original.");
+                dragCloneGO = null;
+                usingClone = false;
             }
 
-            // 把 clone 立刻放到鼠标位置（BeginDrag 时）
-            Vector2 localPointerPos;
-            var cam = eventData.pressEventCamera;
-            if (canvasRect != null && RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, eventData.position, cam, out localPointerPos))
+            if (dragCloneGO != null)
             {
-                if (activeDragRect != null) activeDragRect.anchoredPosition = localPointerPos;
-                pointerOffset = Vector2.zero; // 从鼠标位置开始拖拽
+                dragCloneGO.name = gameObject.name + "_DragClone";
+
+                // 立即为克隆添加标记组件（可选）
+                try
+                {
+                    dragCloneGO.AddComponent<DragCloneMarker>();
+                }
+                catch
+                {
+                    // ignore if marker type isn't present
+                }
+
+                // 立即隐藏克隆中的信息面板相关子对象（不会禁用任何脚本）
+                DisableInfoChildInClone(dragCloneGO);
+
+                // 在随后若干帧再次强制隐藏，以防 OnEnable/Start 中被打开
+                StartCoroutine(EnsureInfoRemainsHidden(dragCloneGO, enforceHideFrames));
+
+                // Put clone under dragRoot WITHOUT preserving world position
+                if (dragRoot != null)
+                    dragCloneGO.transform.SetParent(dragRoot, false);
+
+                // 禁用克隆上的 CardDragHandler 避免重复行为（DropZone 接受后会负责启用并设置）
+                var cd = dragCloneGO.GetComponent<CardDragHandler>();
+                if (cd != null) cd.enabled = false;
+
+                // Clone should not block raycasts (so raycasts hit underlying UI)
+                CanvasGroup cloneCg = dragCloneGO.GetComponent<CanvasGroup>();
+                if (cloneCg == null)
+                {
+                    try
+                    {
+                        cloneCg = dragCloneGO.AddComponent<CanvasGroup>();
+                    }
+                    catch (System.Exception addEx)
+                    {
+                        Debug.LogWarning($"[CardDragHandler] AddComponent<CanvasGroup> on clone failed: {addEx}. Trying GetComponent.");
+                        cloneCg = dragCloneGO.GetComponent<CanvasGroup>();
+                    }
+                }
+                if (cloneCg != null)
+                {
+                    cloneCg.blocksRaycasts = false;
+                    cloneCg.interactable = false;
+                }
+                else
+                {
+                    Debug.LogWarning("[CardDragHandler] clone CanvasGroup is null; clone may block raycasts unexpectedly.");
+                }
+
+                // active drag rect is the clone's rect transform
+                activeDragRect = dragCloneGO.GetComponent<RectTransform>();
+
+                // Normalize anchors/pivot & size calc
+                if (activeDragRect != null)
+                {
+                    activeDragRect.pivot = new Vector2(0.5f, 0.5f);
+                    activeDragRect.anchorMin = activeDragRect.anchorMax = new Vector2(0.5f, 0.5f);
+
+                    // 强制重建布局以便计算 preferred size（若存在 LayoutGroup / ContentSizeFitter）
+                    LayoutRebuilder.ForceRebuildLayoutImmediate(activeDragRect);
+
+                    // 计算合适尺寸（自动 + 容错），然后 clamp 到 min/max
+                    Vector2 calcSize = CalculateCloneSize(activeDragRect, rootCanvas, fallbackCloneSize);
+                    float clampedW = Mathf.Clamp(calcSize.x, minCloneSize.x, maxCloneSize.x);
+                    float clampedH = Mathf.Clamp(calcSize.y, minCloneSize.y, maxCloneSize.y);
+                    activeDragRect.sizeDelta = new Vector2(clampedW, clampedH);
+                }
+
+                // 把 clone 立刻放到鼠标位置（BeginDrag 时）
+                Vector2 localPointerPos;
+                var cam = eventData.pressEventCamera;
+                if (canvasRect != null && RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, eventData.position, cam, out localPointerPos))
+                {
+                    if (activeDragRect != null) activeDragRect.anchoredPosition = localPointerPos;
+                    pointerOffset = Vector2.zero; // 从鼠标位置开始拖拽
+                }
+                else
+                {
+                    pointerOffset = Vector2.zero;
+                }
+
+                // IMPORTANT: Don't let the ORIGINAL block raycasts while dragging a clone.
+                // That lets the pointer hit underlying drop zones.
+                if (cg == null)
+                {
+                    try
+                    {
+                        cg = gameObject.AddComponent<CanvasGroup>();
+                    }
+                    catch (System.Exception addEx)
+                    {
+                        Debug.LogWarning($"[CardDragHandler] AddComponent<CanvasGroup> on original failed: {addEx}. Trying GetComponent.");
+                        cg = gameObject.GetComponent<CanvasGroup>();
+                    }
+                }
+                if (cg != null)
+                {
+                    cg.blocksRaycasts = false;
+                }
+                else
+                {
+                    Debug.LogWarning("[CardDragHandler] original CanvasGroup is null; raycast behavior may be incorrect while dragging clone.");
+                }
             }
             else
             {
-                pointerOffset = Vector2.zero;
+                // clone 创建失败，退回移动原件逻辑（使用原件移动）
+                usingClone = false;
+                // fall through to original branch behavior below
+                if (cg == null)
+                {
+                    try
+                    {
+                        cg = gameObject.AddComponent<CanvasGroup>();
+                    }
+                    catch (System.Exception addEx)
+                    {
+                        Debug.LogWarning($"[CardDragHandler] AddComponent<CanvasGroup> on original failed: {addEx}. Trying GetComponent.");
+                        cg = gameObject.GetComponent<CanvasGroup>();
+                    }
+                }
+                if (cg != null) cg.blocksRaycasts = false;
+                if (dragRoot == null)
+                {
+                    rootCanvas = GetComponentInParent<Canvas>();
+                    if (rootCanvas != null)
+                    {
+                        dragRoot = rootCanvas.transform;
+                        canvasRect = dragRoot as RectTransform;
+                    }
+                }
+                if (dragRoot != null)
+                    transform.SetParent(dragRoot, true);
+                activeDragRect = rectTransform;
+                Vector2 localPointerPos;
+                var cam = eventData.pressEventCamera;
+                if (canvasRect != null && RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, eventData.position, cam, out localPointerPos))
+                {
+                    pointerOffset = rectTransform != null ? rectTransform.anchoredPosition - localPointerPos : Vector2.zero;
+                }
+                else
+                {
+                    pointerOffset = Vector2.zero;
+                }
             }
-
-            // IMPORTANT: Don't let the ORIGINAL block raycasts while dragging a clone.
-            // That lets the pointer hit underlying drop zones.
-            if (cg == null) cg = gameObject.AddComponent<CanvasGroup>();
-            cg.blocksRaycasts = false;
         }
         else
         {
             // ORIGINAL MOVE MODE
             usingClone = false;
 
-            if (cg == null) cg = gameObject.AddComponent<CanvasGroup>();
-            cg.blocksRaycasts = false; // allow raycast to pass through
+            if (cg == null)
+            {
+                try
+                {
+                    cg = gameObject.AddComponent<CanvasGroup>();
+                }
+                catch (System.Exception addEx)
+                {
+                    Debug.LogWarning($"[CardDragHandler] AddComponent<CanvasGroup> on original failed: {addEx}. Trying GetComponent.");
+                    cg = gameObject.GetComponent<CanvasGroup>();
+                }
+            }
+            if (cg != null) cg.blocksRaycasts = false; // allow raycast to pass through
+            else Debug.LogWarning("[CardDragHandler] original CanvasGroup is null; raycast behavior may be incorrect while dragging.");
 
             if (dragRoot == null)
             {
@@ -186,7 +303,7 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
             var cam = eventData.pressEventCamera;
             if (canvasRect != null && RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, eventData.position, cam, out localPointerPos))
             {
-                pointerOffset = rectTransform.anchoredPosition - localPointerPos;
+                pointerOffset = rectTransform != null ? rectTransform.anchoredPosition - localPointerPos : Vector2.zero;
             }
             else
             {
@@ -438,7 +555,7 @@ public class CardDragHandler : MonoBehaviour, IBeginDragHandler, IDragHandler, I
         return fallback;
     }
 
-    // ========== 新增：在克隆上隐藏信息面板的实现（不禁用任何组件） ==========
+    // ========== 在克隆上隐藏信息面板的实现（不禁用任何组件） ==========
     void DisableInfoChildInClone(GameObject clone)
     {
         if (clone == null || infoNameTokens == null || infoNameTokens.Length == 0) return;
