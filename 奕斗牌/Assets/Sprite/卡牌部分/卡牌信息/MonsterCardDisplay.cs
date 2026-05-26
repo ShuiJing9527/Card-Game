@@ -150,7 +150,7 @@ public class MonsterCardDisplay : MonoBehaviour, IPointerEnterHandler, IPointerE
     // 以下为原有辅助方法（ParseTypes / ExtractNameFromLink 等）
     private string EnumTypeToDisplay(MonsterCardType t)
     {
-        if (t == MonsterCardType.Effect) return "效果";
+        if (t == MonsterCardType.Effect) return "効果";
         if (t == MonsterCardType.Judge) return "判定";
         return t.ToString();
     }
@@ -170,14 +170,14 @@ public class MonsterCardDisplay : MonoBehaviour, IPointerEnterHandler, IPointerE
 
         foreach (var p in parts)
         {
-            if (p.Contains("效果")) AddOnce(result, "效果");
+            if (p.Contains("効果")) AddOnce(result, "効果");
             else if (p.Contains("判定")) AddOnce(result, "判定");
             else if (p.IndexOf("Effect", StringComparison.OrdinalIgnoreCase) >= 0) AddOnce(result, "Effect");
             else if (p.IndexOf("Judge", StringComparison.OrdinalIgnoreCase) >= 0) AddOnce(result, "Judge");
         }
 
         var ordered = new List<string>();
-        if (result.Contains("效果")) ordered.Add("效果");
+        if (result.Contains("効果")) ordered.Add("効果");
         if (result.Contains("判定")) ordered.Add("判定");
         if (result.Contains("Effect") && !ordered.Contains("Effect")) ordered.Add("Effect");
         if (result.Contains("Judge") && !ordered.Contains("Judge")) ordered.Add("Judge");
@@ -192,8 +192,8 @@ public class MonsterCardDisplay : MonoBehaviour, IPointerEnterHandler, IPointerE
 
         foreach (var t in parsedTypes)
         {
-            if (t == "效果" || t == "判定")
-                s = s.Replace("效果", "").Replace("判定", "");
+            if (t == "効果" || t == "判定")
+                s = s.Replace("効果", "").Replace("判定", "");
             else
                 s = RemoveIgnoreCase(s, t);
         }

@@ -104,7 +104,7 @@ public class CardCounter : MonoBehaviour
             if (t == null || string.IsNullOrEmpty(t.gameObject.name)) continue;
             var nm = t.gameObject.name.ToLower();
             if (cardNameTMP == null && (nm.Contains("卡名") || nm.Contains("name") || nm.Contains("bond") || nm.Contains("羁"))) cardNameTMP = t;
-            else if (effectTypeTMP == null && (nm.Contains("效") || nm.Contains("effect") || nm.Contains("判") || nm.Contains("咒"))) effectTypeTMP = t;
+            else if (effectTypeTMP == null && (nm.Contains("効果") || nm.Contains("effect") || nm.Contains("判") || nm.Contains("呪術"))) effectTypeTMP = t;
             else if (countTMP == null && (nm.Contains("数") || nm.Contains("count"))) countTMP = t;
         }
 
@@ -117,7 +117,7 @@ public class CardCounter : MonoBehaviour
                 if (t == null || string.IsNullOrEmpty(t.gameObject.name)) continue;
                 var nm = t.gameObject.name.ToLower();
                 if (cardNameText == null && (nm.Contains("卡名") || nm.Contains("name") || nm.Contains("bond") || nm.Contains("羁"))) cardNameText = t;
-                else if (effectTypeText == null && (nm.Contains("效") || nm.Contains("effect") || nm.Contains("判") || nm.Contains("咒"))) effectTypeText = t;
+                else if (effectTypeText == null && (nm.Contains("効果") || nm.Contains("effect") || nm.Contains("判") || nm.Contains("呪術"))) effectTypeText = t;
                 else if (countText == null && (nm.Contains("数") || nm.Contains("count"))) countText = t;
             }
         }
@@ -160,7 +160,7 @@ public class CardCounter : MonoBehaviour
     public void RefreshUI()
     {
         // Effect -> 判定/效果， Other -> 咒术
-        string typeLabel = effectType == EffectType.Judge ? "判定" : (effectType == EffectType.Effect ? "效果" : "咒术");
+        string typeLabel = effectType == EffectType.Judge ? "判定" : (effectType == EffectType.Effect ? "効果" : "呪術");
 
         Debug.Log($"[CardCounter.RefreshUI] id={cardId} cardName='{cardName}' effect={effectType} overrideCount={overrideCount} s_loaded={s_playerCountsLoaded}");
 

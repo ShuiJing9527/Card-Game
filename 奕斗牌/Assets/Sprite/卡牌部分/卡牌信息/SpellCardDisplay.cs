@@ -23,15 +23,15 @@ public class SpellCardDisplay : MonoBehaviour
             magicDescriptionText.text = s.Card_Description ?? "";  // 卡面白色区域（法术描述）
 
         // 优先使用外部传入的 stackDescription（CSV 中的短叠放描述），否则显示叠放数量
-        string displayStack = !string.IsNullOrEmpty(stackDescription) ? stackDescription : $"叠放数: {s.StackCount}";
+        string displayStack = !string.IsNullOrEmpty(stackDescription) ? stackDescription : $"重ねる数: {s.StackCount}";
         if (stackDescriptionText != null)
             stackDescriptionText.text = displayStack;  // 卡面紫色区域（叠放描述）
 
         if (usageLabelText != null)
         {
             string usage = "";
-            if (s.CanUseAsMagic) usage += "咒术";
-            if (s.CanUseAsStack) usage += (usage.Length > 0 ? " / " : "") + "叠放";
+            if (s.CanUseAsMagic) usage += "呪術";
+            if (s.CanUseAsStack) usage += (usage.Length > 0 ? " / " : "") + "重ねる";
             usageLabelText.text = usage;
         }
 
